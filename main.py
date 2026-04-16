@@ -24,24 +24,23 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            # Migrate: add new columns to existing tables (safe for both SQLite & Postgres)
-            from sqlalchemy import text, inspect
-            def _migrate(connection):
-                inspector = inspect(connection)
-                if "chat_sessions" in inspector.get_table_names():
-                    existing = [c["name"] for c in inspector.get_columns("chat_sessions")]
-                    new_cols = {
-                        "client_city": "VARCHAR",
-                        "client_audience": "VARCHAR",
-                        "preferred_time": "VARCHAR",
-                        "funnel_stage": "VARCHAR DEFAULT 'new'",
-                        "is_subscription_offered": "BOOLEAN DEFAULT FALSE",
-                    }
-                    for col, col_type in new_cols.items():
-                        if col not in existing:
-                            connection.execute(text(f"ALTER TABLE chat_sessions ADD COLUMN {col} {col_type}"))
-                            print(f"  ✅ Added column: {col}")
-            await conn.run_sync(_migrate)
+        # Migrate: add new columns (safe — ignores if already exists)
+        from sqlalchemy import text
+        new_cols = [
+            "ALTER TABLE chat_sessions ADD COLUMN client_city VARCHAR",
+            "ALTER TABLE chat_sessions ADD COLUMN client_audience VARCHAR",
+            "ALTER TABLE chat_sessions ADD COLUMN preferred_time VARCHAR",
+            "ALTER TABLE chat_sessions ADD COLUMN funnel_stage VARCHAR DEFAULT 'new'",
+            "ALTER TABLE chat_sessions ADD COLUMN is_subscription_offered BOOLEAN DEFAULT FALSE",
+        ]
+        for sql in new_cols:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text(sql))
+                col_name = sql.split("ADD COLUMN ")[1].split(" ")[0]
+                print(f"  ✅ Added column: {col_name}")
+            except Exception:
+                pass  # Column already exists
         print("✅ DATABASE INITIALIZED")
         logger.success("✅ Database Schema Ready.")
     except Exception as e:
