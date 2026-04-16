@@ -1,5 +1,4 @@
 import asyncio
-import httpx
 from sqlalchemy.future import select
 from sqlalchemy import func
 from loguru import logger
@@ -7,8 +6,6 @@ from datetime import datetime, timedelta, timezone
 from database import AsyncSessionLocal
 from models import ChatSession
 from integrations import send_telegram_alert
-
-SELF_URL = "https://school-go-whatsapp-bot.onrender.com/health"
 
 ALMATY_TZ = timezone(timedelta(hours=5))
 
@@ -136,26 +133,12 @@ async def handle_daily_report(db):
         logger.error(f"Daily Report Error: {e}")
 
 
-async def self_ping():
-    """Ping /health каждые 10 мин чтобы Render не засыпал."""
-    try:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(SELF_URL, timeout=10)
-            logger.debug(f"🏓 Self-ping: {r.status_code}")
-    except Exception as e:
-        logger.warning(f"🏓 Self-ping failed: {e}")
-
-
 async def scheduler_loop():
-    """Protected infinite loop — self-ping every 10 min, tasks every 30 min."""
-    logger.info("📅 Scheduler started (10 min ping, 30 min tasks)")
-    tick = 0
+    """Protected infinite loop — runs every 30 min."""
+    logger.info("📅 Scheduler started (30 min interval, Almaty UTC+5)")
     while True:
         try:
-            await self_ping()
-            if tick % 3 == 0:  # каждые 30 мин (3 × 10 мин)
-                await check_all_proactive_tasks()
-            tick += 1
+            await check_all_proactive_tasks()
         except Exception as e:
             logger.error(f"🚨 SCHEDULER FAILURE: {e}")
-        await asyncio.sleep(600)  # 10 мин
+        await asyncio.sleep(1800)
