@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
             "preferred_time": "VARCHAR",
             "funnel_stage": "VARCHAR DEFAULT 'new'",
             "is_subscription_offered": "BOOLEAN DEFAULT FALSE",
+            "client_format": "VARCHAR",
         }
         async with engine.begin() as conn:
             if is_postgres:
@@ -81,6 +82,8 @@ async def leads_dashboard():
         "city": {"label": "📍 Город", "color": "#3b82f6", "items": []},
         "qualified": {"label": "✅ Квалиф.", "color": "#f59e0b", "items": []},
         "booked": {"label": "📅 Записан", "color": "#10b981", "items": []},
+        "rescheduled": {"label": "🔄 Перенос", "color": "#f97316", "items": []},
+        "declined": {"label": "❌ Отказ", "color": "#ef4444", "items": []},
         "paid": {"label": "💰 Оплачен", "color": "#059669", "items": []},
     }
 
@@ -90,9 +93,10 @@ async def leads_dashboard():
             stage = "new"
         phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
         aud = "👶" if s.client_audience == "children" else ("👤" if s.client_audience == "adults" else "")
+        fmt = "🌐" if getattr(s, 'client_format', None) == "online" else ("🏫" if getattr(s, 'client_format', None) == "offline" else "")
         date = s.created_at.strftime("%d.%m %H:%M") if s.created_at else ""
         last = s.last_interaction.strftime("%d.%m %H:%M") if s.last_interaction else ""
-        stages[stage]["items"].append({"name": s.client_name or "—", "phone": phone, "city": s.client_city or "", "aud": aud, "date": date, "last": last, "mk": s.booked_date or "", "age": str(s.child_age) if s.child_age else ""})
+        stages[stage]["items"].append({"name": s.client_name or "—", "phone": phone, "city": s.client_city or "", "aud": aud, "fmt": fmt, "date": date, "last": last, "mk": s.booked_date or "", "age": str(s.child_age) if s.child_age else ""})
 
     cols_html = ""
     for key, st in stages.items():
@@ -103,6 +107,8 @@ async def leads_dashboard():
                 info += f" {item['aud']}"
             if item['age']:
                 info += f" ({item['age']} лет)"
+            if item['fmt']:
+                info += f" {item['fmt']}"
             if item['mk']:
                 info += f" 📅{item['mk']}"
             cards += f"""<div class="card">
@@ -117,8 +123,12 @@ async def leads_dashboard():
         </div>"""
 
     total = len(sessions)
-    booked = sum(1 for s in sessions if s.booked_date)
+    booked = sum(1 for s in sessions if s.funnel_stage == "booked")
     paid = sum(1 for s in sessions if s.is_paid)
+    declined = sum(1 for s in sessions if s.funnel_stage == "declined")
+    rescheduled = sum(1 for s in sessions if s.funnel_stage == "rescheduled")
+    online = sum(1 for s in sessions if getattr(s, 'client_format', None) == "online")
+    offline = sum(1 for s in sessions if getattr(s, 'client_format', None) == "offline")
 
     return f"""<!DOCTYPE html>
 <html><head>
@@ -159,8 +169,11 @@ async def leads_dashboard():
 <div class="stats">
   <div class="stat"><div class="stat-num">{total}</div><div class="stat-label">Всего</div></div>
   <div class="stat"><div class="stat-num">{booked}</div><div class="stat-label">Записаны</div></div>
+  <div class="stat"><div class="stat-num">{rescheduled}</div><div class="stat-label">Перенос</div></div>
+  <div class="stat"><div class="stat-num">{declined}</div><div class="stat-label">Отказ</div></div>
   <div class="stat"><div class="stat-num">{paid}</div><div class="stat-label">Оплачено</div></div>
-  <div class="stat"><div class="stat-num">{int(booked/total*100) if total else 0}%</div><div class="stat-label">Конверсия</div></div>
+  <div class="stat"><div class="stat-num">🏫{offline} 🌐{online}</div><div class="stat-label">Формат</div></div>
+  <div class="stat"><div class="stat-num">{int((booked+paid)/total*100) if total else 0}%</div><div class="stat-label">Конверсия</div></div>
 </div>
 <div class="board">{cols_html}</div>
 <script>setTimeout(()=>location.reload(), 30000)</script>
@@ -177,7 +190,7 @@ async def leads_table():
     rows = ""
     for s in sessions:
         phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
-        stage_map = {"new":"🆕 Новый","name":"👤 Имя","city":"📍 Город","qualified":"✅ Квалиф.","booked":"📅 Записан","paid":"💰 Оплачен"}
+        stage_map = {"new":"🆕 Новый","name":"👤 Имя","city":"📍 Город","qualified":"✅ Квалиф.","booked":"📅 Записан","rescheduled":"🔄 Перенос","declined":"❌ Отказ","paid":"💰 Оплачен"}
         status = stage_map.get(s.funnel_stage or "new", "🆕 Новый")
         date = s.created_at.strftime("%d.%m.%Y %H:%M") if s.created_at else ""
         aud = "Дети" if s.client_audience == "children" else ("Взрослые" if s.client_audience == "adults" else "—")
@@ -290,6 +303,10 @@ async def process_incoming_message(
             if ai_response.extracted_preferred_time and not session.preferred_time:
                 session.preferred_time = ai_response.extracted_preferred_time
 
+            # FORMAT (online/offline)
+            if ai_response.extracted_format and not session.client_format:
+                session.client_format = ai_response.extracted_format
+
             # PAYMENT
             if ai_response.is_paid_detected and not session.is_paid:
                 session.is_paid = True
@@ -297,6 +314,10 @@ async def process_incoming_message(
             # AUTO FUNNEL STAGE
             if session.is_paid:
                 session.funnel_stage = "paid"
+            elif ai_response.is_declined:
+                session.funnel_stage = "declined"
+            elif ai_response.is_reschedule_request and not ai_response.booked_date:
+                session.funnel_stage = "rescheduled"
             elif session.booked_date:
                 session.funnel_stage = "booked"
             elif session.client_audience:

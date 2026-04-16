@@ -32,7 +32,8 @@ class ChatSession(Base):
     client_city = Column(String, nullable=True)
     client_audience = Column(String, nullable=True)  # "children" | "adults"
     preferred_time = Column(String, nullable=True)
-    funnel_stage = Column(String, default="new")  # new|name|city|qualified|booked|paid|attended
+    client_format = Column(String, nullable=True)  # "online" | "offline"
+    funnel_stage = Column(String, default="new")  # new|name|city|qualified|booked|rescheduled|declined|paid
     is_subscription_offered = Column(Boolean, default=False)
     
     # Timestamps

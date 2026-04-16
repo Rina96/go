@@ -25,8 +25,10 @@ class AIResponseSchema(BaseModel):
     extracted_audience: Optional[str] = ""
     extracted_child_age: Optional[str] = ""
     extracted_preferred_time: Optional[str] = ""
+    extracted_format: Optional[str] = ""  # "online" | "offline"
     booked_date: Optional[str] = ""
     is_reschedule_request: Optional[bool] = False
+    is_declined: Optional[bool] = False  # client refused MK
     is_paid_detected: Optional[bool] = False
 
 
@@ -121,10 +123,19 @@ class LlmEngine:
 Если картинка не похожа на чек — просто отреагируй естественно.
 
 ИЗВЛЕЧЕНИЕ ДАННЫХ — верни в JSON если клиент сообщил:
-extracted_name, extracted_city, extracted_audience (children/adults), extracted_child_age, extracted_preferred_time, booked_date (ДД.ММ), is_reschedule_request, is_paid_detected
+- extracted_name: имя
+- extracted_city: город
+- extracted_audience: children / adults
+- extracted_child_age: возраст ребёнка
+- extracted_preferred_time: когда удобно
+- extracted_format: "online" если хочет онлайн, "offline" если оффлайн
+- booked_date: дата МК (ДД.ММ)
+- is_reschedule_request: true если переносит запись
+- is_declined: true если чётко отказался от МК ("нет", "не хочу", "не интересно")
+- is_paid_detected: true если отправил чек оплаты
 
 ФОРМАТ: только JSON. Пример:
-{{"reply_text": "Сулу, рада знакомству! Вы с какого города?😊", "extracted_name": "Сулу"}}
+{{"reply_text": "Сулу, рада знакомству! Вы с какого города?😊", "extracted_name": "Сулу", "extracted_format": "offline"}}
 """
 
     def extract_text_from_pdf(self, pdf_bytes: bytes) -> str:
