@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from database import engine, AsyncSessionLocal
 from crud import crud
+from integrations import send_telegram_alert
 from llm_engine import llm
 from green_api import wa_client
 from scheduler import scheduler_loop
@@ -460,6 +461,44 @@ async def process_incoming_message(
                 session.funnel_stage = "new"
 
             await wa_client.send_message(chat_id, ai_response.reply_text)
+
+            # TELEGRAM ALERTS
+            phone = chat_id.replace("@c.us", "")
+            name = session.client_name or phone
+
+            if ai_response.needs_human:
+                asyncio.create_task(send_telegram_alert(
+                    f"🆘 <b>Нужен менеджер!</b>\n\n"
+                    f"👤 {name}\n📱 {phone}\n"
+                    f"💬 Сообщение: {text[:200]}\n\n"
+                    f"🔗 <a href='https://school-go-whatsapp-bot.onrender.com/leads/{session.id}'>Карточка клиента</a>"
+                ))
+
+            if ai_response.is_paid_detected:
+                asyncio.create_task(send_telegram_alert(
+                    f"💰 <b>Оплата получена!</b>\n\n"
+                    f"👤 {name}\n📱 {phone}\n"
+                    f"📅 МК: {session.booked_date or '—'}\n\n"
+                    f"🔗 <a href='https://school-go-whatsapp-bot.onrender.com/leads/{session.id}'>Карточка</a>"
+                ))
+
+            if ai_response.booked_date and not ai_response.is_reschedule_request:
+                asyncio.create_task(send_telegram_alert(
+                    f"📅 <b>Новая запись на МК!</b>\n\n"
+                    f"👤 {name}\n📱 {phone}\n"
+                    f"🏙 {session.client_city or '—'} | {'👶 Дети' if session.client_audience == 'children' else '👤 Взрослые' if session.client_audience == 'adults' else '—'}\n"
+                    f"📅 Дата: {ai_response.booked_date}\n\n"
+                    f"🔗 <a href='https://school-go-whatsapp-bot.onrender.com/leads/{session.id}'>Карточка</a>"
+                ))
+
+            if ai_response.is_declined:
+                asyncio.create_task(send_telegram_alert(
+                    f"❌ <b>Клиент отказался</b>\n\n"
+                    f"👤 {name}\n📱 {phone}\n"
+                    f"📝 Причина: {ai_response.decline_reason or 'не указана'}\n\n"
+                    f"🔗 <a href='https://school-go-whatsapp-bot.onrender.com/leads/{session.id}'>Карточка</a>"
+                ))
+
             await db.commit()
 
     except Exception as e:

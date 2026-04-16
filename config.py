@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     GREEN_API_API_TOKEN_INSTANCE: str = os.getenv("GREEN_API_API_TOKEN_INSTANCE", "")
     GREEN_API_HOST: str = os.getenv("GREEN_API_HOST", "https://api.green-api.com")
     
-    # Google Sheets Integration
-    GOOGLE_SHEETS_CREDENTIALS: str = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")
-    GOOGLE_SHEETS_ID: str = os.getenv("GOOGLE_SHEETS_ID", "")
+    # Telegram Alerts
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "8709014238:AAHx9akX59ZYU0BDs62bSeREF9r9yBRR-04")
+    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "-1003904484773")
     
     class Config:
         env_file = ".env"
