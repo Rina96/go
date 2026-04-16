@@ -214,6 +214,11 @@ async def process_incoming_message(
                         alfa_crm.add_comment(int(crm_id), "📋 " + ", ".join(qual_parts))
                     )
 
+            # Mark payment in DB
+            if ai_response.is_paid_detected and not session.is_paid:
+                session.is_paid = True
+                print(f"💰 [PAID] {chat_id} — payment detected!")
+
             # Update CRM status
             if crm_id:
                 if ai_response.is_paid_detected:
