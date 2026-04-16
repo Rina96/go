@@ -123,6 +123,9 @@ class AlfaCrmManager:
             payload = {
                 "name": name,
                 "is_lead": 1,
+                "is_study": 0,
+                "legal_type": 1,
+                "branch_ids": [self.BRANCH_ID],
                 "phone": [clean_phone],
                 "lead_status_id": self.STATUS_NEW
             }
