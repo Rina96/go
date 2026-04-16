@@ -16,16 +16,14 @@ def now_almaty() -> datetime:
 
 
 async def check_all_proactive_tasks():
-    """Execute all scheduler tasks with full error isolation."""
-    try:
-        async with AsyncSessionLocal() as db:
-            await handle_sunday_broadcast(db)
-            await handle_pre_event_reminders(db)
-            await handle_post_event_feedback(db)
-            await handle_reactivations(db)
-            await handle_subscription_followup(db)
-    except Exception as e:
-        logger.error(f"❌ SCHEDULER DB ERROR: {e}")
+    """All proactive outbound messages DISABLED. Bot only replies to incoming."""
+    # Disabled: bot should NOT send messages first, only reply
+    # await handle_sunday_broadcast(db)
+    # await handle_pre_event_reminders(db)
+    # await handle_post_event_feedback(db)
+    # await handle_reactivations(db)
+    # await handle_subscription_followup(db)
+    pass
 
 
 async def handle_sunday_broadcast(db):
