@@ -245,6 +245,8 @@ async def webhook(request: Request):
             text = ""
             image_url = None
 
+            msg_type = msg_data.get("typeMessage", "")
+
             if "textMessageData" in msg_data:
                 text = msg_data["textMessageData"].get("textMessage", "")
             elif "extendedTextMessageData" in msg_data:
@@ -252,8 +254,16 @@ async def webhook(request: Request):
             elif "imageMessageData" in msg_data:
                 image_url = msg_data["imageMessageData"].get("downloadUrl")
                 text = msg_data["imageMessageData"].get("caption", "Image")
+            elif msg_type == "audioMessage" or "fileMessageData" in msg_data and msg_type == "audioMessage":
+                file_data = msg_data.get("fileMessageData", {})
+                audio_url = file_data.get("downloadUrl", "")
+                if audio_url and settings.WHISPER_ENABLED:
+                    text = f"[AUDIO_URL:{audio_url}]"
+                    print(f"🎤 Audio detected: {audio_url[:60]}...")
+                else:
+                    text = "[Голосовое сообщение]"
             elif "audioMessageData" in msg_data:
-                audio_url = msg_data["audioMessageData"].get("downloadUrl")
+                audio_url = msg_data["audioMessageData"].get("downloadUrl", "")
                 if audio_url and settings.WHISPER_ENABLED:
                     text = f"[AUDIO_URL:{audio_url}]"
                 else:
