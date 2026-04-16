@@ -20,6 +20,31 @@ from sqlalchemy.future import select
 from models import ChatSession
 from database import Base
 
+# ═══════════════════════════════════════════
+# БУФЕР СООБЩЕНИЙ — ждём 10 сек, склеиваем
+# ═══════════════════════════════════════════
+_msg_buffers: dict[str, list] = {}   # chat_id → [{text, image_url, ts}, ...]
+_msg_timers: dict[str, asyncio.Task] = {}   # chat_id → pending task
+
+
+async def _flush_buffer(chat_id: str):
+    """Ждёт 10 сек, склеивает все сообщения и вызывает process_incoming_message."""
+    await asyncio.sleep(10)
+
+    msgs = _msg_buffers.pop(chat_id, [])
+    _msg_timers.pop(chat_id, None)
+
+    if not msgs:
+        return
+
+    texts = [m["text"] for m in msgs if m["text"]]
+    combined_text = "\n".join(texts)
+    last_image = next((m["image_url"] for m in reversed(msgs) if m["image_url"]), None)
+    earliest_ts = msgs[0]["ts"]
+
+    if combined_text or last_image:
+        await process_incoming_message(chat_id, combined_text, earliest_ts, last_image)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -547,9 +572,17 @@ async def webhook(request: Request):
                     text = file_data.get("caption", "") or "Клиент отправил документ"
 
             if chat_id and "@c.us" in chat_id and (text or image_url):
-                asyncio.create_task(
-                    process_incoming_message(chat_id, text, incoming_ts, image_url)
-                )
+                # Буфер: копим сообщения 10 сек, потом отвечаем на все сразу
+                if chat_id not in _msg_buffers:
+                    _msg_buffers[chat_id] = []
+                _msg_buffers[chat_id].append({
+                    "text": text, "image_url": image_url, "ts": incoming_ts
+                })
+                # Сбрасываем таймер — каждое новое сообщение продлевает ожидание
+                old_timer = _msg_timers.get(chat_id)
+                if old_timer:
+                    old_timer.cancel()
+                _msg_timers[chat_id] = asyncio.create_task(_flush_buffer(chat_id))
 
         return {"status": "ok"}
     except Exception as e:
