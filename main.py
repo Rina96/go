@@ -330,7 +330,7 @@ async def process_incoming_message(
     image_url: Optional[str] = None
 ):
     try:
-        cloud_history = await wa_client.get_chat_history(chat_id, count=15)
+        cloud_history = await wa_client.get_chat_history(chat_id, count=10)
 
         human_replied = any(
             msg.get("role") == "assistant" and msg.get("ts", 0) > incoming_ts

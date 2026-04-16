@@ -174,7 +174,7 @@ class LlmEngine:
             content.append({"type": "image_url", "image_url": {"url": image_url}})
 
         messages = [{"role": "system", "content": system_instruction}]
-        for msg in chat_history[-20:]:
+        for msg in chat_history[-10:]:
             role = "user" if msg.get("role") == "user" else "assistant"
             messages.append({"role": role, "content": msg.get("text", "")})
         messages.append({"role": "user", "content": content})
@@ -185,7 +185,7 @@ class LlmEngine:
                 messages=messages,
                 response_format={"type": "json_object"},
                 temperature=0.4,
-                max_tokens=400
+                max_tokens=250
             )
             data = json.loads(response.choices[0].message.content)
             logger.success("🧠 GPT-4o OK")
