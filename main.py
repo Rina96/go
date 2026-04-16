@@ -68,72 +68,126 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/leads", response_class=HTMLResponse)
 async def leads_dashboard():
-    """Web dashboard showing all leads."""
+    """CRM-style kanban dashboard with funnel stages."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(ChatSession).order_by(ChatSession.created_at.desc())
         )
         sessions = result.scalars().all()
 
-    rows_html = ""
-    for s in sessions:
-        phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
-        status = "💰 Оплачен" if s.is_paid else ("📅 Записан" if s.booked_date else ("✅ Квалифицирован" if s.is_qualified else "🆕 Новый"))
-        date = s.created_at.strftime("%d.%m.%Y %H:%M") if s.created_at else ""
-        audience = ""
-        if s.client_audience == "children":
-            audience = "👶 Дети"
-        elif s.client_audience == "adults":
-            audience = "👤 Взрослые"
-        child_age = str(s.child_age) if s.child_age else ""
+    stages = {
+        "new": {"label": "🆕 Новый", "color": "#6b7280", "items": []},
+        "name": {"label": "👤 Имя", "color": "#8b5cf6", "items": []},
+        "city": {"label": "📍 Город", "color": "#3b82f6", "items": []},
+        "qualified": {"label": "✅ Квалиф.", "color": "#f59e0b", "items": []},
+        "booked": {"label": "📅 Записан", "color": "#10b981", "items": []},
+        "paid": {"label": "💰 Оплачен", "color": "#059669", "items": []},
+    }
 
-        rows_html += f"""<tr>
-            <td>{date}</td>
-            <td><b>{s.client_name or '—'}</b></td>
-            <td>{phone}</td>
-            <td>{s.client_city or '—'}</td>
-            <td>{audience}</td>
-            <td>{child_age}</td>
-            <td>{s.preferred_time or '—'}</td>
-            <td>{s.booked_date or '—'}</td>
-            <td>{status}</td>
-        </tr>"""
+    for s in sessions:
+        stage = s.funnel_stage or "new"
+        if stage not in stages:
+            stage = "new"
+        phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
+        aud = "👶" if s.client_audience == "children" else ("👤" if s.client_audience == "adults" else "")
+        date = s.created_at.strftime("%d.%m %H:%M") if s.created_at else ""
+        last = s.last_interaction.strftime("%d.%m %H:%M") if s.last_interaction else ""
+        stages[stage]["items"].append({"name": s.client_name or "—", "phone": phone, "city": s.client_city or "", "aud": aud, "date": date, "last": last, "mk": s.booked_date or "", "age": str(s.child_age) if s.child_age else ""})
+
+    cols_html = ""
+    for key, st in stages.items():
+        cards = ""
+        for item in st["items"]:
+            info = f"{item['city']}" if item['city'] else ""
+            if item['aud']:
+                info += f" {item['aud']}"
+            if item['age']:
+                info += f" ({item['age']} лет)"
+            if item['mk']:
+                info += f" 📅{item['mk']}"
+            cards += f"""<div class="card">
+              <div class="card-name">{item['name']}</div>
+              <div class="card-phone">{item['phone']}</div>
+              <div class="card-info">{info}</div>
+              <div class="card-time">Последний: {item['last']}</div>
+            </div>"""
+        cols_html += f"""<div class="col">
+          <div class="col-header" style="background:{st['color']}">{st['label']} <span class="count">{len(st['items'])}</span></div>
+          <div class="col-body">{cards if cards else '<div class="empty-col">—</div>'}</div>
+        </div>"""
+
+    total = len(sessions)
+    booked = sum(1 for s in sessions if s.booked_date)
+    paid = sum(1 for s in sessions if s.is_paid)
 
     return f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Айжан — Лиды</title>
+<title>Айжан CRM</title>
 <style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; padding: 20px; }}
-  .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }}
-  h1 {{ font-size: 24px; color: #333; }}
-  .stats {{ display: flex; gap: 15px; margin-bottom: 20px; }}
-  .stat {{ background: white; padding: 15px 25px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-  .stat-num {{ font-size: 28px; font-weight: bold; color: #2563eb; }}
-  .stat-label {{ font-size: 12px; color: #666; margin-top: 2px; }}
-  table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-  th {{ background: #2563eb; color: white; padding: 12px 15px; text-align: left; font-size: 13px; }}
-  td {{ padding: 10px 15px; border-bottom: 1px solid #eee; font-size: 13px; }}
-  tr:hover {{ background: #f8fafc; }}
-  .btn {{ background: #2563eb; color: white; padding: 8px 20px; border-radius: 6px; text-decoration: none; font-size: 13px; }}
-  .btn:hover {{ background: #1d4ed8; }}
-  .empty {{ text-align: center; padding: 60px; color: #999; }}
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#0f172a; color:#e2e8f0; padding:15px; }}
+  .top {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; }}
+  h1 {{ font-size:20px; }}
+  .stats {{ display:flex; gap:10px; margin-bottom:15px; }}
+  .stat {{ background:#1e293b; padding:12px 20px; border-radius:8px; text-align:center; }}
+  .stat-num {{ font-size:24px; font-weight:bold; color:#38bdf8; }}
+  .stat-label {{ font-size:11px; color:#94a3b8; }}
+  .board {{ display:flex; gap:10px; overflow-x:auto; padding-bottom:10px; }}
+  .col {{ min-width:200px; flex:1; background:#1e293b; border-radius:10px; }}
+  .col-header {{ padding:10px 12px; border-radius:10px 10px 0 0; color:white; font-size:13px; font-weight:600; display:flex; justify-content:space-between; }}
+  .count {{ background:rgba(255,255,255,0.2); padding:1px 8px; border-radius:10px; font-size:11px; }}
+  .col-body {{ padding:8px; display:flex; flex-direction:column; gap:6px; max-height:70vh; overflow-y:auto; }}
+  .card {{ background:#0f172a; border:1px solid #334155; border-radius:8px; padding:10px; }}
+  .card-name {{ font-weight:600; font-size:13px; color:#f1f5f9; }}
+  .card-phone {{ font-size:11px; color:#64748b; margin-top:2px; }}
+  .card-info {{ font-size:11px; color:#94a3b8; margin-top:4px; }}
+  .card-time {{ font-size:10px; color:#475569; margin-top:4px; }}
+  .empty-col {{ text-align:center; padding:20px; color:#475569; font-size:12px; }}
+  .btn {{ background:#2563eb; color:white; padding:7px 16px; border-radius:6px; text-decoration:none; font-size:12px; }}
+  .btn:hover {{ background:#1d4ed8; }}
+  .tabs {{ display:flex; gap:8px; margin-bottom:15px; }}
+  .tab {{ padding:6px 14px; border-radius:6px; font-size:12px; cursor:pointer; border:1px solid #334155; color:#94a3b8; text-decoration:none; }}
+  .tab.active {{ background:#2563eb; color:white; border-color:#2563eb; }}
 </style>
 </head><body>
-<div class="header">
-  <h1>🎯 Айжан — Панель лидов</h1>
-  <a href="/leads/csv" class="btn">📥 Скачать CSV</a>
+<div class="top">
+  <h1>��� Айжан CRM</h1>
+  <div><a href="/leads/table" class="btn" style="margin-right:6px">📋 Таблица</a><a href="/leads/csv" class="btn">📥 CSV</a></div>
 </div>
 <div class="stats">
-  <div class="stat"><div class="stat-num">{len(sessions)}</div><div class="stat-label">Всего лидов</div></div>
-  <div class="stat"><div class="stat-num">{sum(1 for s in sessions if s.booked_date)}</div><div class="stat-label">Записаны на МК</div></div>
-  <div class="stat"><div class="stat-num">{sum(1 for s in sessions if s.is_paid)}</div><div class="stat-label">Оплачено</div></div>
+  <div class="stat"><div class="stat-num">{total}</div><div class="stat-label">Всего</div></div>
+  <div class="stat"><div class="stat-num">{booked}</div><div class="stat-label">Записаны</div></div>
+  <div class="stat"><div class="stat-num">{paid}</div><div class="stat-label">Оплачено</div></div>
+  <div class="stat"><div class="stat-num">{int(booked/total*100) if total else 0}%</div><div class="stat-label">Конверсия</div></div>
 </div>
-{"<table><thead><tr><th>Дата</th><th>Имя</th><th>Телефон</th><th>Город</th><th>Для кого</th><th>Возраст</th><th>Удобно</th><th>Дата МК</th><th>Статус</th></tr></thead><tbody>" + rows_html + "</tbody></table>" if sessions else '<div class="empty">Пока нет лидов. Когда клиент напишет боту — он появится здесь.</div>'}
+<div class="board">{cols_html}</div>
 <script>setTimeout(()=>location.reload(), 30000)</script>
 </body></html>"""
+
+
+@app.get("/leads/table", response_class=HTMLResponse)
+async def leads_table():
+    """Table view of all leads."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(ChatSession).order_by(ChatSession.created_at.desc()))
+        sessions = result.scalars().all()
+
+    rows = ""
+    for s in sessions:
+        phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
+        stage_map = {"new":"🆕 Новый","name":"👤 Имя","city":"📍 Город","qualified":"✅ Квалиф.","booked":"📅 Записан","paid":"💰 Оплачен"}
+        status = stage_map.get(s.funnel_stage or "new", "🆕 Новый")
+        date = s.created_at.strftime("%d.%m.%Y %H:%M") if s.created_at else ""
+        aud = "Дети" if s.client_audience == "children" else ("Взрослые" if s.client_audience == "adults" else "—")
+        rows += f"<tr><td>{date}</td><td><b>{s.client_name or '—'}</b></td><td>{phone}</td><td>{s.client_city or '—'}</td><td>{aud}</td><td>{s.child_age or '—'}</td><td>{s.preferred_time or '��'}</td><td>{s.booked_date or '—'}</td><td>{status}</td></tr>"
+
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Айжан — Таблица</title>
+<style>*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;padding:15px}}.top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:15px}}h1{{font-size:20px}}table{{width:100%;border-collapse:collapse;background:#1e293b;border-radius:10px;overflow:hidden}}th{{background:#2563eb;color:white;padding:10px 12px;text-align:left;font-size:12px}}td{{padding:8px 12px;border-bottom:1px solid #334155;font-size:12px}}tr:hover{{background:#334155}}.btn{{background:#2563eb;color:white;padding:7px 16px;border-radius:6px;text-decoration:none;font-size:12px}}</style></head><body>
+<div class="top"><h1>📋 Айжан — Таблица лидов</h1><div><a href="/leads" class="btn" style="margin-right:6px">🎯 Воронка</a><a href="/leads/csv" class="btn">📥 CSV</a></div></div>
+<table><thead><tr><th>Дата</th><th>Имя</th><th>Телефон</th><th>Город</th><th>Дл�� кого</th><th>Возраст</th><th>Удобно</th><th>Дата МК</th><th>Стадия</th></tr></thead><tbody>{rows}</tbody></table>
+<script>setTimeout(()=>location.reload(),30000)</script></body></html>"""
 
 
 @app.get("/leads/csv")
@@ -239,6 +293,20 @@ async def process_incoming_message(
             # PAYMENT
             if ai_response.is_paid_detected and not session.is_paid:
                 session.is_paid = True
+
+            # AUTO FUNNEL STAGE
+            if session.is_paid:
+                session.funnel_stage = "paid"
+            elif session.booked_date:
+                session.funnel_stage = "booked"
+            elif session.client_audience:
+                session.funnel_stage = "qualified"
+            elif session.client_city:
+                session.funnel_stage = "city"
+            elif session.client_name:
+                session.funnel_stage = "name"
+            else:
+                session.funnel_stage = "new"
 
             await wa_client.send_message(chat_id, ai_response.reply_text)
             await db.commit()
