@@ -83,7 +83,7 @@ async def process_incoming_message(
         print(f"⚡️ [1/8] Processing message for {chat_id}...")
 
         # Check Human Takeover (timestamp-based)
-        cloud_history = await wa_client.get_chat_history(chat_id, count=5)
+        cloud_history = await wa_client.get_chat_history(chat_id, count=15)
 
         human_replied = any(
             msg.get("role") == "assistant" and msg.get("ts", 0) > incoming_ts
@@ -126,7 +126,12 @@ async def process_incoming_message(
 
             await crud.add_message_to_history(db, session, role="user", text=text)
 
-            final_history = cloud_history if cloud_history else (session.history_json or [])
+            # Merge: DB history is primary, cloud fills gaps
+            db_history = session.history_json or []
+            if cloud_history and len(cloud_history) > len(db_history):
+                final_history = cloud_history
+            else:
+                final_history = db_history
 
             # AI Response
             print(f"🤖 [3/8] Generating AI response for {chat_id}...")
