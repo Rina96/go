@@ -26,9 +26,13 @@ class AIResponseSchema(BaseModel):
     extracted_child_age: Optional[str] = ""
     extracted_preferred_time: Optional[str] = ""
     extracted_format: Optional[str] = ""  # "online" | "offline"
+    extracted_reason: Optional[str] = ""  # why interested
+    extracted_objection: Optional[str] = ""  # current objection
+    ai_note: Optional[str] = ""  # short AI summary of conversation state
     booked_date: Optional[str] = ""
     is_reschedule_request: Optional[bool] = False
-    is_declined: Optional[bool] = False  # client refused MK
+    is_declined: Optional[bool] = False
+    decline_reason: Optional[str] = ""  # why declined
     is_paid_detected: Optional[bool] = False
 
 
@@ -122,20 +126,24 @@ class LlmEngine:
 Если это чек оплаты → поставь is_paid_detected=true и ответь: "(Имя), принято✅ Записала вас! Напоминание отправим за день😊"
 Если картинка не похожа на чек — просто отреагируй естественно.
 
-ИЗВЛЕЧЕНИЕ ДАННЫХ — верни в JSON если клиент сообщил:
-- extracted_name: имя
-- extracted_city: город
-- extracted_audience: children / adults
+ИЗВЛЕЧЕНИЕ ДАННЫХ — ВСЕГДА заполняй все поля которые можешь определить из разговора:
+- extracted_name: имя клиента
+- extracted_city: город (любой, даже если не Алматы/Астана — всё равно сохрани!)
+- extracted_audience: "children" / "adults"
 - extracted_child_age: возраст ребёнка
 - extracted_preferred_time: когда удобно
-- extracted_format: "online" если хочет онлайн, "offline" если оффлайн
+- extracted_format: "online" / "offline"
+- extracted_reason: почему интересуется Го (для развития ребенка / для бизнеса / хобби / друг посоветовал / и т.д.)
+- extracted_objection: текущее возражение клиента (дорого / нет времени / подумаю / далеко / и т.д.)
+- ai_note: краткая заметка о клиенте (1 предложение), например "Мама двоих, ищет замену телефону" или "Бизнесмен, хочет стратег. мышление"
 - booked_date: дата МК (ДД.ММ)
 - is_reschedule_request: true если переносит запись
-- is_declined: true если чётко отказался от МК ("нет", "не хочу", "не интересно")
-- is_paid_detected: true если отправил чек оплаты
+- is_declined: true если чётко отказался
+- decline_reason: причина отказа если отказался
+- is_paid_detected: true если отправил чек
 
 ФОРМАТ: только JSON. Пример:
-{{"reply_text": "Сулу, рада знакомству! Вы с какого города?😊", "extracted_name": "Сулу", "extracted_format": "offline"}}
+{{"reply_text": "Сулу, рада знакомству! Вы с какого города?😊", "extracted_name": "Сулу", "extracted_reason": "для развития ребенка", "ai_note": "Мама, ребёнку 7 лет, Алматы"}}
 """
 
     def extract_text_from_pdf(self, pdf_bytes: bytes) -> str:

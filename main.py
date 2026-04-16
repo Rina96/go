@@ -35,6 +35,10 @@ async def lifespan(app: FastAPI):
             "funnel_stage": "VARCHAR DEFAULT 'new'",
             "is_subscription_offered": "BOOLEAN DEFAULT FALSE",
             "client_format": "VARCHAR",
+            "client_reason": "VARCHAR",
+            "client_objection": "VARCHAR",
+            "ai_notes": "VARCHAR",
+            "decline_reason": "VARCHAR",
         }
         async with engine.begin() as conn:
             if is_postgres:
@@ -271,6 +275,10 @@ async def lead_card(lead_id: int):
       <div class="info-item"><span class="info-label">��добное время</span><span class="info-value">{s.preferred_time or '—'}</span></div>
       <div class="info-item"><span class="info-label">Дата МК</span><span class="info-value">{s.booked_date or '—'}</span></div>
       <div class="info-item"><span class="info-label">Оплата</span><span class="info-value">{'✅ Да' if s.is_paid else '❌ Нет'}</span></div>
+      <div class="info-item"><span class="info-label">Причина интереса</span><span class="info-value">{getattr(s, 'client_reason', None) or '—'}</span></div>
+      <div class="info-item"><span class="info-label">Возражение</span><span class="info-value">{getattr(s, 'client_objection', None) or '—'}</span></div>
+      <div class="info-item"><span class="info-label">AI заметка</span><span class="info-value">{getattr(s, 'ai_notes', None) or '—'}</span></div>
+      <div class="info-item"><span class="info-label">Причина отказа</span><span class="info-value">{getattr(s, 'decline_reason', None) or '—'}</span></div>
       <div class="info-item"><span class="info-label">Первый контакт</span><span class="info-value">{created}</span></div>
       <div class="info-item"><span class="info-label">Последнее сообщение</span><span class="info-value">{last}</span></div>
       <div class="info-item"><span class="info-label">Сообщений</span><span class="info-value">{len(history)}</span></div>
@@ -368,6 +376,14 @@ async def process_incoming_message(
                 parts.append(f"Записан на МК: {session.booked_date}")
             if session.is_paid:
                 parts.append("Оплатил ✅")
+            if session.client_reason:
+                parts.append(f"Причина интереса: {session.client_reason}")
+            if session.client_objection:
+                parts.append(f"Возражение: {session.client_objection}")
+            if session.ai_notes:
+                parts.append(f"Заметка: {session.ai_notes}")
+            if session.decline_reason:
+                parts.append(f"Причина отказа: {session.decline_reason}")
             if session.funnel_stage:
                 stage_ru = {"new":"новый","name":"назвал имя","city":"указал город","qualified":"квалифицирован","booked":"записан","rescheduled":"перенёс","declined":"отказался","paid":"оплатил"}
                 parts.append(f"Стадия: {stage_ru.get(session.funnel_stage, session.funnel_stage)}")
@@ -396,24 +412,30 @@ async def process_incoming_message(
                 session.booked_date = ai_response.booked_date
                 session.booked_at = datetime.datetime.utcnow()
 
-            # SAVE QUALIFICATION
-            if ai_response.extracted_name and not session.client_name:
+            # SAVE ALL DATA (overwrite if updated)
+            if ai_response.extracted_name:
                 session.client_name = ai_response.extracted_name
-            if ai_response.extracted_city and not session.client_city:
+            if ai_response.extracted_city:
                 session.client_city = ai_response.extracted_city
-            if ai_response.extracted_audience and not session.client_audience:
+            if ai_response.extracted_audience:
                 session.client_audience = ai_response.extracted_audience
-            if ai_response.extracted_child_age and not session.child_age:
+            if ai_response.extracted_child_age:
                 try:
                     session.child_age = int(ai_response.extracted_child_age)
                 except (ValueError, TypeError):
                     pass
-            if ai_response.extracted_preferred_time and not session.preferred_time:
+            if ai_response.extracted_preferred_time:
                 session.preferred_time = ai_response.extracted_preferred_time
-
-            # FORMAT (online/offline)
-            if ai_response.extracted_format and not session.client_format:
+            if ai_response.extracted_format:
                 session.client_format = ai_response.extracted_format
+            if ai_response.extracted_reason:
+                session.client_reason = ai_response.extracted_reason
+            if ai_response.extracted_objection:
+                session.client_objection = ai_response.extracted_objection
+            if ai_response.ai_note:
+                session.ai_notes = ai_response.ai_note
+            if ai_response.decline_reason:
+                session.decline_reason = ai_response.decline_reason
 
             # PAYMENT
             if ai_response.is_paid_detected and not session.is_paid:

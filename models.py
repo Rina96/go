@@ -33,8 +33,12 @@ class ChatSession(Base):
     client_audience = Column(String, nullable=True)  # "children" | "adults"
     preferred_time = Column(String, nullable=True)
     client_format = Column(String, nullable=True)  # "online" | "offline"
-    funnel_stage = Column(String, default="new")  # new|name|city|qualified|booked|rescheduled|declined|paid
+    client_reason = Column(String, nullable=True)  # why interested in Go
+    client_objection = Column(String, nullable=True)  # last objection
+    ai_notes = Column(String, nullable=True)  # AI summary notes
+    funnel_stage = Column(String, default="new")
     is_subscription_offered = Column(Boolean, default=False)
+    decline_reason = Column(String, nullable=True)  # why declined
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
