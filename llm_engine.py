@@ -57,8 +57,8 @@ class LlmEngine:
             return ""
 
     def _build_system_prompt(self, client_name: str = "") -> str:
-        from integrations import alfa_crm
-        dates = alfa_crm.get_upcoming_weekend_dates()
+        from integrations import sheets
+        dates = sheets.get_upcoming_weekend_dates()
         payment = self.kb.get("payment", {})
 
         now = datetime.now(ALMATY_TZ)
