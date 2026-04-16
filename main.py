@@ -1,17 +1,20 @@
 import asyncio
+import io
+import csv
 import time
 import datetime
 from typing import Optional
 from loguru import logger
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
 from database import engine, AsyncSessionLocal
 from crud import crud
 from llm_engine import llm
 from green_api import wa_client
-from integrations import sheets
 from scheduler import scheduler_loop
 from contextlib import asynccontextmanager
 from config import settings
+from sqlalchemy.future import select
 
 from models import ChatSession
 from database import Base
@@ -48,30 +51,127 @@ async def lifespan(app: FastAPI):
                         ))
                     except Exception:
                         pass
-        print("✅ DATABASE INITIALIZED")
-        logger.success("✅ Database Schema Ready.")
+        print("✅ DB READY")
     except Exception as e:
-        print(f"❌ DATABASE ERROR: {e}")
-        logger.error(f"❌ DB Init Fail: {e}")
+        print(f"❌ DB ERROR: {e}")
 
     asyncio.create_task(scheduler_loop())
     yield
-    print("🔌 АЙЖАН SHUTTING DOWN...")
 
 
 app = FastAPI(lifespan=lifespan)
 
 
+# ═══════════════════════════════════════════
+# LEADS DASHBOARD
+# ═══════════════════════════════════════════
+
+@app.get("/leads", response_class=HTMLResponse)
+async def leads_dashboard():
+    """Web dashboard showing all leads."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ChatSession).order_by(ChatSession.created_at.desc())
+        )
+        sessions = result.scalars().all()
+
+    rows_html = ""
+    for s in sessions:
+        phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
+        status = "💰 Оплачен" if s.is_paid else ("📅 Записан" if s.booked_date else ("✅ Квалифицирован" if s.is_qualified else "🆕 Новый"))
+        date = s.created_at.strftime("%d.%m.%Y %H:%M") if s.created_at else ""
+        audience = ""
+        if s.client_audience == "children":
+            audience = "👶 Дети"
+        elif s.client_audience == "adults":
+            audience = "👤 Взрослые"
+        child_age = str(s.child_age) if s.child_age else ""
+
+        rows_html += f"""<tr>
+            <td>{date}</td>
+            <td><b>{s.client_name or '—'}</b></td>
+            <td>{phone}</td>
+            <td>{s.client_city or '—'}</td>
+            <td>{audience}</td>
+            <td>{child_age}</td>
+            <td>{s.preferred_time or '—'}</td>
+            <td>{s.booked_date or '—'}</td>
+            <td>{status}</td>
+        </tr>"""
+
+    return f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Айжан — Лиды</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; padding: 20px; }}
+  .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }}
+  h1 {{ font-size: 24px; color: #333; }}
+  .stats {{ display: flex; gap: 15px; margin-bottom: 20px; }}
+  .stat {{ background: white; padding: 15px 25px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
+  .stat-num {{ font-size: 28px; font-weight: bold; color: #2563eb; }}
+  .stat-label {{ font-size: 12px; color: #666; margin-top: 2px; }}
+  table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
+  th {{ background: #2563eb; color: white; padding: 12px 15px; text-align: left; font-size: 13px; }}
+  td {{ padding: 10px 15px; border-bottom: 1px solid #eee; font-size: 13px; }}
+  tr:hover {{ background: #f8fafc; }}
+  .btn {{ background: #2563eb; color: white; padding: 8px 20px; border-radius: 6px; text-decoration: none; font-size: 13px; }}
+  .btn:hover {{ background: #1d4ed8; }}
+  .empty {{ text-align: center; padding: 60px; color: #999; }}
+</style>
+</head><body>
+<div class="header">
+  <h1>🎯 Айжан — Панель лидов</h1>
+  <a href="/leads/csv" class="btn">📥 Скачать CSV</a>
+</div>
+<div class="stats">
+  <div class="stat"><div class="stat-num">{len(sessions)}</div><div class="stat-label">Всего лидов</div></div>
+  <div class="stat"><div class="stat-num">{sum(1 for s in sessions if s.booked_date)}</div><div class="stat-label">Записаны на МК</div></div>
+  <div class="stat"><div class="stat-num">{sum(1 for s in sessions if s.is_paid)}</div><div class="stat-label">Оплачено</div></div>
+</div>
+{"<table><thead><tr><th>Дата</th><th>Имя</th><th>Телефон</th><th>Город</th><th>Для кого</th><th>Возраст</th><th>Удобно</th><th>Дата МК</th><th>Статус</th></tr></thead><tbody>" + rows_html + "</tbody></table>" if sessions else '<div class="empty">Пока нет лидов. Когда клиент напишет боту — он появится здесь.</div>'}
+<script>setTimeout(()=>location.reload(), 30000)</script>
+</body></html>"""
+
+
+@app.get("/leads/csv")
+async def leads_csv():
+    """Download leads as CSV for Excel/Google Sheets."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ChatSession).order_by(ChatSession.created_at.desc())
+        )
+        sessions = result.scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Дата", "Имя", "Телефон", "Город", "Для кого", "Возраст ребенка", "Удобное время", "Дата МК", "Статус"])
+    for s in sessions:
+        phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
+        status = "Оплачен" if s.is_paid else ("Записан" if s.booked_date else ("Квалифицирован" if s.is_qualified else "Новый"))
+        date = s.created_at.strftime("%d.%m.%Y %H:%M") if s.created_at else ""
+        aud = "Дети" if s.client_audience == "children" else ("Взрослые" if s.client_audience == "adults" else "")
+        writer.writerow([date, s.client_name or "", phone, s.client_city or "", aud, s.child_age or "", s.preferred_time or "", s.booked_date or "", status])
+
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8-sig")),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=leads.csv"}
+    )
+
+
+# ═══════════════════════════════════════════
+# MESSAGE PROCESSING
+# ═══════════════════════════════════════════
+
 async def process_incoming_message(
-    chat_id: str,
-    text: str,
-    incoming_ts: int,
+    chat_id: str, text: str, incoming_ts: int,
     image_url: Optional[str] = None
 ):
-    """AI Sales Pipeline v8.0 — Google Sheets CRM."""
     try:
-        print(f"⚡️ [1/8] Processing message for {chat_id}...")
-
         cloud_history = await wa_client.get_chat_history(chat_id, count=15)
 
         human_replied = any(
@@ -79,31 +179,18 @@ async def process_incoming_message(
             for msg in cloud_history
         )
         if human_replied:
-            print(f"🛡 Human takeover in {chat_id}. Silent.")
             return
 
-        print(f"🧠 [2/8] Fetching context for {chat_id}...")
         async with AsyncSessionLocal() as db:
-            # Google Sheets lookup
-            sheet_lead = await sheets.get_customer_by_phone(chat_id)
-            sheet_name = sheet_lead.get("name", "") if sheet_lead else ""
-            sheet_row = sheet_lead.get("id") if sheet_lead else None
-
             session = await crud.get_or_create_session(db, chat_id)
-            if sheet_row:
-                session.crm_lead_id = str(sheet_row)
-            if sheet_name and not session.client_name:
-                session.client_name = sheet_name
 
             # AUDIO TRANSCRIPTION
             if text.startswith("[AUDIO_URL:") and text.endswith("]"):
                 audio_url = text[len("[AUDIO_URL:"):-1]
                 try:
-                    print(f"🎤 [2.5/8] Transcribing audio for {chat_id}...")
                     audio_bytes = await wa_client.download_file(audio_url)
                     transcription = await asyncio.to_thread(llm.transcribe_audio, audio_bytes)
                     text = transcription if transcription else "[Голосовое — не распознано]"
-                    print(f"🎤 Transcription: '{text[:60]}...'")
                 except Exception as e:
                     logger.error(f"Audio error: {e}")
                     text = "[Голосовое — не распознано]"
@@ -113,34 +200,28 @@ async def process_incoming_message(
             db_history = session.history_json or []
             final_history = cloud_history if (cloud_history and len(cloud_history) > len(db_history)) else db_history
 
-            # AI Response
-            print(f"🤖 [3/8] Generating AI response for {chat_id}...")
             ai_response = await asyncio.to_thread(
                 llm.generate_response,
                 user_message=text,
                 chat_history=final_history,
                 image_url=image_url,
-                client_name=sheet_name or session.client_name or ""
+                client_name=session.client_name or ""
             )
 
-            print(f"💬 [4/8] Response: '{ai_response.reply_text[:40]}...'")
             await crud.add_message_to_history(db, session, role="assistant", text=ai_response.reply_text)
 
             # RESCHEDULING
             if ai_response.is_reschedule_request:
-                old_date = session.booked_date
                 session.booked_date = None
                 session.booked_at = None
                 session.is_reminder_sent = False
-                if sheet_row:
-                    asyncio.create_task(sheets.add_comment(sheet_row, f"🔄 Перенос: отменил {old_date}"))
 
             # BOOKING
             if ai_response.booked_date:
                 session.booked_date = ai_response.booked_date
                 session.booked_at = datetime.datetime.utcnow()
 
-            # SAVE QUALIFICATION DATA to session
+            # SAVE QUALIFICATION
             if ai_response.extracted_name and not session.client_name:
                 session.client_name = ai_response.extracted_name
             if ai_response.extracted_city and not session.client_city:
@@ -159,44 +240,16 @@ async def process_incoming_message(
             if ai_response.is_paid_detected and not session.is_paid:
                 session.is_paid = True
 
-            success = await wa_client.send_message(chat_id, ai_response.reply_text)
-            print(f"{'✅' if success else '❌'} [6/8] WA send: {success}")
-
-            # GOOGLE SHEETS SYNC
-            if not sheet_row:
-                print(f"📊 [7/8] Creating Sheets lead for {chat_id}...")
-                sheet_row = await sheets.sync_customer(
-                    chat_id,
-                    session.client_name or ai_response.extracted_name or "WA Lead"
-                )
-                if sheet_row:
-                    session.crm_lead_id = str(sheet_row)
-                    asyncio.create_task(sheets.add_comment(sheet_row, f"Первое: {text[:100]}"))
-
-            # Update Sheets fields
-            if sheet_row:
-                if ai_response.extracted_city:
-                    asyncio.create_task(sheets.update_field(sheet_row, sheets.COL_CITY, ai_response.extracted_city))
-                if ai_response.extracted_audience:
-                    aud = "дети" if ai_response.extracted_audience == "children" else "взрослые"
-                    asyncio.create_task(sheets.update_field(sheet_row, sheets.COL_AUDIENCE, aud))
-                if ai_response.extracted_child_age:
-                    asyncio.create_task(sheets.update_field(sheet_row, sheets.COL_CHILD_AGE, ai_response.extracted_child_age))
-                if ai_response.extracted_preferred_time:
-                    asyncio.create_task(sheets.update_field(sheet_row, sheets.COL_PREF_TIME, ai_response.extracted_preferred_time))
-                if ai_response.booked_date:
-                    asyncio.create_task(sheets.update_field(sheet_row, sheets.COL_MK_DATE, ai_response.booked_date))
-                    asyncio.create_task(sheets.set_status(sheet_row, sheets.STATUS_BOOKED))
-                if ai_response.is_paid_detected:
-                    asyncio.create_task(sheets.set_status(sheet_row, sheets.STATUS_PAID))
-
+            await wa_client.send_message(chat_id, ai_response.reply_text)
             await db.commit()
-            print(f"✅ [8/8] Done: {chat_id}")
 
     except Exception as e:
-        print(f"🚨 ERROR for {chat_id}: {e}")
-        logger.error(f"🚨 Worker error: {e}")
+        logger.error(f"🚨 Error for {chat_id}: {e}")
 
+
+# ═══════════════════════════════════════════
+# WEBHOOK
+# ═══════════════════════════════════════════
 
 @app.post("/webhook/green-api")
 async def webhook(request: Request):
@@ -242,15 +295,10 @@ async def webhook(request: Request):
 
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"🚨 Webhook error: {e}")
-        return {"status": "error", "reason": str(e)}
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error"}
 
 
 @app.get("/health")
 async def health():
-    return {"status": "active", "version": "8.0-Aizhan-GoogleSheets"}
-
-
-@app.api_route("/{full_path:path}", methods=["GET", "POST", "HEAD"])
-async def catch_all(request: Request, full_path: str = ""):
-    return {"status": "ok", "path": full_path, "bot": "Aizhan 8.0"}
+    return {"status": "active", "version": "8.0-Aizhan-Dashboard"}
