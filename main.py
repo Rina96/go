@@ -96,7 +96,7 @@ async def leads_dashboard():
         fmt = "🌐" if getattr(s, 'client_format', None) == "online" else ("🏫" if getattr(s, 'client_format', None) == "offline" else "")
         date = s.created_at.strftime("%d.%m %H:%M") if s.created_at else ""
         last = s.last_interaction.strftime("%d.%m %H:%M") if s.last_interaction else ""
-        stages[stage]["items"].append({"name": s.client_name or "—", "phone": phone, "city": s.client_city or "", "aud": aud, "fmt": fmt, "date": date, "last": last, "mk": s.booked_date or "", "age": str(s.child_age) if s.child_age else ""})
+        stages[stage]["items"].append({"id": s.id, "name": s.client_name or "—", "phone": phone, "city": s.client_city or "", "aud": aud, "fmt": fmt, "date": date, "last": last, "mk": s.booked_date or "", "age": str(s.child_age) if s.child_age else ""})
 
     cols_html = ""
     for key, st in stages.items():
@@ -111,12 +111,12 @@ async def leads_dashboard():
                 info += f" {item['fmt']}"
             if item['mk']:
                 info += f" 📅{item['mk']}"
-            cards += f"""<div class="card">
+            cards += f"""<a href="/leads/{item['id']}" class="card">
               <div class="card-name">{item['name']}</div>
               <div class="card-phone">{item['phone']}</div>
               <div class="card-info">{info}</div>
               <div class="card-time">Последний: {item['last']}</div>
-            </div>"""
+            </a>"""
         cols_html += f"""<div class="col">
           <div class="col-header" style="background:{st['color']}">{st['label']} <span class="count">{len(st['items'])}</span></div>
           <div class="col-body">{cards if cards else '<div class="empty-col">—</div>'}</div>
@@ -149,7 +149,8 @@ async def leads_dashboard():
   .col-header {{ padding:10px 12px; border-radius:10px 10px 0 0; color:white; font-size:13px; font-weight:600; display:flex; justify-content:space-between; }}
   .count {{ background:rgba(255,255,255,0.2); padding:1px 8px; border-radius:10px; font-size:11px; }}
   .col-body {{ padding:8px; display:flex; flex-direction:column; gap:6px; max-height:70vh; overflow-y:auto; }}
-  .card {{ background:#0f172a; border:1px solid #334155; border-radius:8px; padding:10px; }}
+  .card {{ background:#0f172a; border:1px solid #334155; border-radius:8px; padding:10px; text-decoration:none; color:inherit; display:block; cursor:pointer; transition:border-color 0.2s; }}
+  .card:hover {{ border-color:#2563eb; }}
   .card-name {{ font-weight:600; font-size:13px; color:#f1f5f9; }}
   .card-phone {{ font-size:11px; color:#64748b; margin-top:2px; }}
   .card-info {{ font-size:11px; color:#94a3b8; margin-top:4px; }}
@@ -230,6 +231,87 @@ async def leads_csv():
     )
 
 
+@app.get("/leads/{lead_id}", response_class=HTMLResponse)
+async def lead_card(lead_id: int):
+    """Client card with full info and chat history."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(ChatSession).where(ChatSession.id == lead_id))
+        s = result.scalar_one_or_none()
+    if not s:
+        return HTMLResponse("<h1>Клиент не найден</h1>", status_code=404)
+
+    phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
+    stage_map = {"new":"🆕 Новый","name":"👤 Имя получено","city":"📍 Город указан","qualified":"✅ Квалифицирован","booked":"📅 Записан на МК","rescheduled":"🔄 Перенёс МК","declined":"❌ Отказался","paid":"💰 Оплачен"}
+    status = stage_map.get(s.funnel_stage or "new", "🆕 Новый")
+    aud = "👶 Дети" if s.client_audience == "children" else ("👤 Взрослые" if s.client_audience == "adults" else "—")
+    fmt = "🌐 Онлайн" if getattr(s, 'client_format', None) == "online" else ("🏫 Оффлайн" if getattr(s, 'client_format', None) == "offline" else "��")
+    created = s.created_at.strftime("%d.%m.%Y %H:%M") if s.created_at else "—"
+    last = s.last_interaction.strftime("%d.%m.%Y %H:%M") if s.last_interaction else "—"
+
+    # Chat history
+    history = s.history_json or []
+    chat_html = ""
+    for msg in history:
+        role = msg.get("role", "")
+        text = msg.get("text", "")
+        if role == "user":
+            chat_html += f'<div class="msg msg-user"><div class="bubble bubble-user">{text}</div></div>'
+        else:
+            chat_html += f'<div class="msg msg-bot"><div class="bubble bubble-bot">{text}</div></div>'
+
+    # Info rows
+    info = f"""
+    <div class="info-grid">
+      <div class="info-item"><span class="info-label">Стадия</span><span class="info-value stage">{status}</span></div>
+      <div class="info-item"><span class="info-label">Телефон</span><span class="info-value">{phone}</span></div>
+      <div class="info-item"><span class="info-label">Город</span><span class="info-value">{s.client_city or '—'}</span></div>
+      <div class="info-item"><span class="info-label">Для кого</span><span class="info-value">{aud}</span></div>
+      <div class="info-item"><span class="info-label">Возраст ребёнка</span><span class="info-value">{s.child_age or '—'}</span></div>
+      <div class="info-item"><span class="info-label">Формат</span><span class="info-value">{fmt}</span></div>
+      <div class="info-item"><span class="info-label">��добное время</span><span class="info-value">{s.preferred_time or '—'}</span></div>
+      <div class="info-item"><span class="info-label">Дата МК</span><span class="info-value">{s.booked_date or '—'}</span></div>
+      <div class="info-item"><span class="info-label">Оплата</span><span class="info-value">{'✅ Да' if s.is_paid else '❌ Нет'}</span></div>
+      <div class="info-item"><span class="info-label">Первый контакт</span><span class="info-value">{created}</span></div>
+      <div class="info-item"><span class="info-label">Последнее сообщение</span><span class="info-value">{last}</span></div>
+      <div class="info-item"><span class="info-label">Сообщений</span><span class="info-value">{len(history)}</span></div>
+    </div>"""
+
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{s.client_name or phone} — Айжан CRM</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;padding:15px;max-width:900px;margin:0 auto}}
+.top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}}
+h1{{font-size:20px}}
+.btn{{background:#2563eb;color:white;padding:7px 16px;border-radius:6px;text-decoration:none;font-size:12px}}
+.card-layout{{display:grid;grid-template-columns:1fr 1fr;gap:15px}}
+@media(max-width:600px){{.card-layout{{grid-template-columns:1fr}}}}
+.panel{{background:#1e293b;border-radius:10px;padding:15px}}
+.panel-title{{font-size:14px;font-weight:600;margin-bottom:12px;color:#94a3b8}}
+.info-grid{{display:grid;grid-template-columns:1fr 1fr;gap:8px}}
+.info-item{{background:#0f172a;border-radius:6px;padding:8px 10px}}
+.info-label{{display:block;font-size:10px;color:#64748b;text-transform:uppercase}}
+.info-value{{display:block;font-size:13px;color:#e2e8f0;margin-top:2px}}
+.stage{{font-size:14px;font-weight:bold}}
+.chat-box{{max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:5px}}
+.msg{{display:flex}}
+.msg-user{{justify-content:flex-end}}
+.msg-bot{{justify-content:flex-start}}
+.bubble{{max-width:80%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.4;word-wrap:break-word}}
+.bubble-user{{background:#2563eb;color:white;border-bottom-right-radius:4px}}
+.bubble-bot{{background:#334155;color:#e2e8f0;border-bottom-left-radius:4px}}
+</style></head><body>
+<div class="top">
+  <h1>{'👤 ' + (s.client_name or phone)}</h1>
+  <a href="/leads" class="btn">← Воронка</a>
+</div>
+<div class="card-layout">
+  <div class="panel"><div class="panel-title">📋 Информация</div>{info}</div>
+  <div class="panel"><div class="panel-title">💬 Переписка ({len(history)} сообщений)</div><div class="chat-box">{chat_html if chat_html else '<div style="text-align:center;color:#475569;padding:20px">Нет сообщений</div>'}</div></div>
+</div>
+</body></html>"""
+
+
 # ═══════════════════════════════════════════
 # MESSAGE PROCESSING
 # ═══════════════════════════════════════════
@@ -267,12 +349,38 @@ async def process_incoming_message(
             db_history = session.history_json or []
             final_history = cloud_history if (cloud_history and len(cloud_history) > len(db_history)) else db_history
 
+            # Build client memory context from DB
+            client_memory = ""
+            parts = []
+            if session.client_name:
+                parts.append(f"Имя: {session.client_name}")
+            if session.client_city:
+                parts.append(f"Город: {session.client_city}")
+            if session.client_audience:
+                parts.append(f"Для: {'детей' if session.client_audience == 'children' else 'взрослых'}")
+            if session.child_age:
+                parts.append(f"Возраст ребёнка: {session.child_age}")
+            if getattr(session, 'client_format', None):
+                parts.append(f"Формат: {'онлайн' if session.client_format == 'online' else 'оффлайн'}")
+            if session.preferred_time:
+                parts.append(f"Удобное время: {session.preferred_time}")
+            if session.booked_date:
+                parts.append(f"Записан на МК: {session.booked_date}")
+            if session.is_paid:
+                parts.append("Оплатил ✅")
+            if session.funnel_stage:
+                stage_ru = {"new":"новый","name":"назвал имя","city":"указал город","qualified":"квалифицирован","booked":"записан","rescheduled":"перенёс","declined":"отказался","paid":"оплатил"}
+                parts.append(f"Стадия: {stage_ru.get(session.funnel_stage, session.funnel_stage)}")
+            if parts:
+                client_memory = "ПАМЯТЬ О КЛИЕНТЕ: " + " | ".join(parts)
+
             ai_response = await asyncio.to_thread(
                 llm.generate_response,
                 user_message=text,
                 chat_history=final_history,
                 image_url=image_url,
-                client_name=session.client_name or ""
+                client_name=session.client_name or "",
+                client_memory=client_memory
             )
 
             await crud.add_message_to_history(db, session, role="assistant", text=ai_response.reply_text)

@@ -149,9 +149,11 @@ class LlmEngine:
     def generate_response(
         self, user_message: str, chat_history: List[dict],
         image_url: Optional[str] = None, pdf_text: Optional[str] = None,
-        client_name: str = ""
+        client_name: str = "", client_memory: str = ""
     ) -> AIResponseSchema:
         system_instruction = self._build_system_prompt(client_name=client_name)
+        if client_memory:
+            system_instruction += f"\n\n{client_memory}\nИспользуй эти данные! Не спрашивай то, что уже знаешь. Если клиент уже назвал имя — не спрашивай снова. Если уже записан — не продавай заново."
 
         full_user_content = user_message
         if pdf_text:
