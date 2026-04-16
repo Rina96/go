@@ -267,28 +267,31 @@ async def webhook(request: Request):
             image_url = None
 
             msg_type = msg_data.get("typeMessage", "")
+            file_data = msg_data.get("fileMessageData", {})
 
-            if "textMessageData" in msg_data:
-                text = msg_data["textMessageData"].get("textMessage", "")
-            elif "extendedTextMessageData" in msg_data:
-                text = msg_data["extendedTextMessageData"].get("text", "")
-            elif "imageMessageData" in msg_data:
-                image_url = msg_data["imageMessageData"].get("downloadUrl")
-                text = msg_data["imageMessageData"].get("caption", "Image")
-            elif msg_type == "audioMessage" or "fileMessageData" in msg_data and msg_type == "audioMessage":
-                file_data = msg_data.get("fileMessageData", {})
+            if msg_type == "textMessage" or "textMessageData" in msg_data:
+                text = msg_data.get("textMessageData", {}).get("textMessage", "")
+            elif msg_type == "extendedTextMessage" or "extendedTextMessageData" in msg_data:
+                text = msg_data.get("extendedTextMessageData", {}).get("text", "")
+            elif msg_type == "imageMessage":
+                image_url = file_data.get("downloadUrl", "")
+                text = file_data.get("caption", "") or "Клиент отправил изображение"
+                print(f"🖼 Image: {image_url[:60]}...")
+            elif msg_type == "audioMessage":
                 audio_url = file_data.get("downloadUrl", "")
                 if audio_url and settings.WHISPER_ENABLED:
                     text = f"[AUDIO_URL:{audio_url}]"
-                    print(f"🎤 Audio detected: {audio_url[:60]}...")
+                    print(f"🎤 Audio: {audio_url[:60]}...")
                 else:
                     text = "[Голосовое сообщение]"
-            elif "audioMessageData" in msg_data:
-                audio_url = msg_data["audioMessageData"].get("downloadUrl", "")
-                if audio_url and settings.WHISPER_ENABLED:
-                    text = f"[AUDIO_URL:{audio_url}]"
+            elif msg_type == "documentMessage":
+                doc_url = file_data.get("downloadUrl", "")
+                mime = file_data.get("mimeType", "")
+                if "pdf" in mime:
+                    text = f"[PDF_URL:{doc_url}]"
+                    print(f"📄 PDF: {doc_url[:60]}...")
                 else:
-                    text = "[Голосовое сообщение]"
+                    text = file_data.get("caption", "") or "Клиент отправил документ"
 
             if chat_id and "@c.us" in chat_id and (text or image_url):
                 print(f"📩 MESSAGE from {chat_id}: '{text[:40]}'")
