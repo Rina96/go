@@ -23,6 +23,7 @@ async def check_all_proactive_tasks():
             await handle_pre_event_reminders(db)
             await handle_post_event_feedback(db)
             await handle_reactivations(db)
+            await handle_subscription_followup(db)
     except Exception as e:
         logger.error(f"❌ SCHEDULER DB ERROR: {e}")
 
@@ -129,6 +130,39 @@ async def handle_reactivations(db):
             logger.info(f"🔄 Reactivations sent: {len(sessions)}")
     except Exception as e:
         logger.error(f"Reactivation Error: {e}")
+        await db.rollback()
+
+
+async def handle_subscription_followup(db):
+    """Offer subscription 24h after feedback was sent."""
+    try:
+        now = now_almaty()
+        threshold = now - timedelta(hours=24)
+        query = select(ChatSession).where(
+            ChatSession.is_feedback_sent == True,
+            ChatSession.is_subscription_offered == False,
+            ChatSession.is_paid == True,
+            ChatSession.last_interaction < threshold
+        )
+        result = await db.execute(query)
+        sessions = result.scalars().all()
+        for session in sessions:
+            name = session.client_name or ""
+            greeting = f"{name}, " if name else ""
+            msg = (
+                f"{greeting}рады, что вы побывали на нашем мастер-классе! 😊\n\n"
+                f"Для тех, кто был на пробном уроке, действует специальная цена "
+                f"на абонемент — от 28 000 тг (обычная цена от 50 000 тг).\n\n"
+                f"Абонемент включает 2 месяца обучения, 12-13 тем для освоения базовых стратегий. "
+                f"Хотите узнать подробнее? 🎯"
+            )
+            await wa_client.send_message(session.whatsapp_chat_id, msg)
+            session.is_subscription_offered = True
+        await db.commit()
+        if sessions:
+            logger.info(f"💰 Subscription followup sent: {len(sessions)}")
+    except Exception as e:
+        logger.error(f"Subscription Followup Error: {e}")
         await db.rollback()
 
 

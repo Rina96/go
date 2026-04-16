@@ -11,6 +11,7 @@ from green_api import wa_client
 from integrations import alfa_crm
 from scheduler import scheduler_loop
 from contextlib import asynccontextmanager
+from config import settings
 
 # CRITICAL: Import models before Base to ensure tables are registered
 from models import ChatSession
@@ -19,7 +20,7 @@ from database import Base
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 JULIA 4.7 STARTING...")
+    print("🚀 АЙЖАН v7.0 STARTING...")
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -31,7 +32,7 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(scheduler_loop())
     yield
-    print("🔌 JULIA SHUTTING DOWN...")
+    print("🔌 АЙЖАН SHUTTING DOWN...")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -44,13 +45,14 @@ async def process_incoming_message(
     image_url: Optional[str] = None
 ):
     """
-    SWISS WATCH CORE: Resilient Message Pipeline 4.7 (ALL BUGS FIXED)
-    FIX 2: generate_response runs in thread pool (non-blocking)
-    FIX 3: booked_at is set when AI detects booked_date
-    FIX 1: client_name passed to AI for personalized responses
+    AI Sales Pipeline v7.0
+    - Audio transcription via Whisper
+    - Name-first qualification flow
+    - Full CRM data sync
+    - Rescheduling support
     """
     try:
-        print(f"⚡️ [1/7] Processing message for {chat_id}...")
+        print(f"⚡️ [1/8] Processing message for {chat_id}...")
 
         # Check Human Takeover (timestamp-based)
         cloud_history = await wa_client.get_chat_history(chat_id, count=5)
@@ -61,12 +63,12 @@ async def process_incoming_message(
         )
 
         if human_replied:
-            print(f"🛡 Human takeover detected in {chat_id}. Julia silent.")
+            print(f"🛡 Human takeover detected in {chat_id}. Айжан silent.")
             return
 
-        print(f"🧠 [2/7] Fetching context for {chat_id}...")
+        print(f"🧠 [2/8] Fetching context for {chat_id}...")
         async with AsyncSessionLocal() as db:
-            # CRM CONTEXT (fail-safe, with name)
+            # CRM CONTEXT
             crm_lead = await alfa_crm.get_customer_by_phone(chat_id)
             crm_name = crm_lead.get("name", "") if crm_lead else ""
             crm_id = crm_lead.get("id") if crm_lead else None
@@ -76,16 +78,30 @@ async def process_incoming_message(
             if crm_id:
                 session.crm_lead_id = str(crm_id)
 
-            # FIX 1: Save name to DB session for future reference
             if crm_name and not session.client_name:
                 session.client_name = crm_name
+
+            # AUDIO TRANSCRIPTION (before saving to history)
+            if text.startswith("[AUDIO_URL:") and text.endswith("]"):
+                audio_url = text[len("[AUDIO_URL:"):-1]
+                try:
+                    print(f"🎤 [2.5/8] Transcribing audio for {chat_id}...")
+                    audio_bytes = await wa_client.download_file(audio_url)
+                    transcription = await asyncio.to_thread(
+                        llm.transcribe_audio, audio_bytes
+                    )
+                    text = transcription if transcription else "[Голосовое сообщение — не удалось распознать]"
+                    print(f"🎤 Transcription: '{text[:60]}...'")
+                except Exception as e:
+                    logger.error(f"Audio transcription error: {e}")
+                    text = "[Голосовое сообщение — не удалось распознать]"
 
             await crud.add_message_to_history(db, session, role="user", text=text)
 
             final_history = cloud_history if cloud_history else (session.history_json or [])
 
-            # FIX 2: Run blocking OpenAI call in thread pool — non-blocking
-            print(f"🤖 [3/7] Generating AI response for {chat_id}...")
+            # AI Response
+            print(f"🤖 [3/8] Generating AI response for {chat_id}...")
             ai_response = await asyncio.to_thread(
                 llm.generate_response,
                 user_message=text,
@@ -94,26 +110,48 @@ async def process_incoming_message(
                 client_name=crm_name or session.client_name or ""
             )
 
-            print(f"💬 [4/7] Sending response to {chat_id}: '{ai_response.reply_text[:40]}...'")
+            print(f"💬 [4/8] Sending response to {chat_id}: '{ai_response.reply_text[:40]}...'")
             await crud.add_message_to_history(db, session, role="assistant", text=ai_response.reply_text)
 
-            # FIX 3: Set booked_at when AI detects booking date
-            if ai_response.booked_date and not session.booked_at:
+            # RESCHEDULING: clear old booking if client wants to reschedule
+            if ai_response.is_reschedule_request:
+                old_date = session.booked_date
+                session.booked_date = None
+                session.booked_at = None
+                session.is_reminder_sent = False
+                print(f"🔄 [5/8] Reschedule for {chat_id}, cleared: {old_date}")
+                if crm_id:
+                    asyncio.create_task(
+                        alfa_crm.add_comment(int(crm_id), f"🔄 Перенос: клиент отменил {old_date}")
+                    )
+
+            # BOOKING: set new date (works for both initial and reschedule)
+            if ai_response.booked_date:
                 session.booked_date = ai_response.booked_date
                 session.booked_at = datetime.datetime.utcnow()
-                print(f"📅 [5/7] Booking set for {chat_id}: {ai_response.booked_date}")
+                print(f"📅 [5/8] Booking set for {chat_id}: {ai_response.booked_date}")
 
-            # FIX 1: Save extracted name from AI if CRM didn't have one
+            # SAVE ALL QUALIFICATION DATA
             if ai_response.extracted_name and not session.client_name:
                 session.client_name = ai_response.extracted_name
+            if ai_response.extracted_city and not session.client_city:
+                session.client_city = ai_response.extracted_city
+            if ai_response.extracted_audience and not session.client_audience:
+                session.client_audience = ai_response.extracted_audience
+            if ai_response.extracted_child_age and not session.child_age:
+                try:
+                    session.child_age = int(ai_response.extracted_child_age)
+                except (ValueError, TypeError):
+                    pass
+            if ai_response.extracted_preferred_time and not session.preferred_time:
+                session.preferred_time = ai_response.extracted_preferred_time
 
             success = await wa_client.send_message(chat_id, ai_response.reply_text)
-            print(f"{'✅' if success else '❌'} [6/7] WA send status: {success}")
+            print(f"{'✅' if success else '❌'} [6/8] WA send status: {success}")
 
             # CRM SYNC: Create or update lead
             if not crm_id:
-                # FIX: await directly to get the new ID and save it to session
-                print(f"📋 [6/7] Creating new CRM lead for {chat_id}...")
+                print(f"📋 [7/8] Creating new CRM lead for {chat_id}...")
                 new_crm_id = await alfa_crm.sync_customer(
                     chat_id,
                     session.client_name or ai_response.extracted_name or "WA Lead"
@@ -122,14 +160,28 @@ async def process_incoming_message(
                     session.crm_lead_id = str(new_crm_id)
                     crm_id = new_crm_id
                     print(f"✅ CRM lead created: ID={new_crm_id}")
-                    # Add first message as context in CRM
                     asyncio.create_task(
                         alfa_crm.add_comment(int(new_crm_id), f"Первое сообщение: {text[:100]}")
                     )
-                else:
-                    print(f"⚠️ CRM lead creation failed — will retry next message")
 
-            # Update CRM status based on AI detections
+            # SYNC QUALIFICATION DATA TO CRM
+            if crm_id:
+                qual_parts = []
+                if ai_response.extracted_city:
+                    qual_parts.append(f"Город: {ai_response.extracted_city}")
+                if ai_response.extracted_audience:
+                    aud = "дети" if ai_response.extracted_audience == "children" else "взрослые"
+                    qual_parts.append(f"Аудитория: {aud}")
+                if ai_response.extracted_child_age:
+                    qual_parts.append(f"Возраст ребенка: {ai_response.extracted_child_age}")
+                if ai_response.extracted_preferred_time:
+                    qual_parts.append(f"Удобное время: {ai_response.extracted_preferred_time}")
+                if qual_parts:
+                    asyncio.create_task(
+                        alfa_crm.add_comment(int(crm_id), "📋 " + ", ".join(qual_parts))
+                    )
+
+            # Update CRM status
             if crm_id:
                 if ai_response.is_paid_detected:
                     asyncio.create_task(
@@ -143,7 +195,7 @@ async def process_incoming_message(
                         alfa_crm.set_status(int(crm_id), alfa_crm.STATUS_BOOKED)
                     )
                     asyncio.create_task(
-                        alfa_crm.add_comment(int(crm_id), f"📅 Записан на мастер-класс: {ai_response.booked_date}")
+                        alfa_crm.add_comment(int(crm_id), f"📅 Записан на МК: {ai_response.booked_date}")
                     )
                 elif ai_response.is_qualified:
                     asyncio.create_task(
@@ -151,7 +203,7 @@ async def process_incoming_message(
                     )
 
             await db.commit()
-            print(f"✅ [7/7] Finished processing {chat_id}")
+            print(f"✅ [8/8] Finished processing {chat_id}")
             logger.success(f"✅ Cycle complete for {chat_id}")
 
     except Exception as e:
@@ -161,17 +213,11 @@ async def process_incoming_message(
 
 @app.post("/webhook/green-api")
 async def webhook(request: Request):
-    """
-    CRITICAL FIX: Green API sends fields at ROOT level, not in 'body'.
-    Correct format: data["typeWebhook"], data["senderData"], data["messageData"]
-    Supports both formats for compatibility.
-    """
+    """Green API webhook handler with audio support."""
     try:
         data = await request.json()
         print(f"DEBUG: WEBHOOK ARRIVED! Keys: {list(data.keys())}")
 
-        # Green API Webhook Endpoint format: fields at ROOT level
-        # (NOT nested in "body" — that was the bug)
         type_webhook = data.get("typeWebhook", "")
 
         if type_webhook == "incomingMessageReceived":
@@ -189,9 +235,15 @@ async def webhook(request: Request):
             elif "imageMessageData" in msg_data:
                 image_url = msg_data["imageMessageData"].get("downloadUrl")
                 text = msg_data["imageMessageData"].get("caption", "Image")
+            elif "audioMessageData" in msg_data:
+                audio_url = msg_data["audioMessageData"].get("downloadUrl")
+                if audio_url and settings.WHISPER_ENABLED:
+                    text = f"[AUDIO_URL:{audio_url}]"
+                else:
+                    text = "[Голосовое сообщение]"
 
             if chat_id and "@c.us" in chat_id and (text or image_url):
-                print(f"📩 RELEVANT MESSAGE from {chat_id}: '{text[:40]}'")
+                print(f"📩 MESSAGE from {chat_id}: '{text[:40]}'")
                 asyncio.create_task(
                     process_incoming_message(chat_id, text, incoming_ts, image_url)
                 )
@@ -211,9 +263,9 @@ async def webhook(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "active", "version": "5.0-Intelligence"}
+    return {"status": "active", "version": "7.0-Aizhan-AI-Sales"}
 
 
 @app.api_route("/{full_path:path}", methods=["GET", "POST", "HEAD"])
 async def catch_all(request: Request, full_path: str = ""):
-    return {"status": "ok", "path": full_path, "bot": "Julia 4.7"}
+    return {"status": "ok", "path": full_path, "bot": "Aizhan 7.0"}

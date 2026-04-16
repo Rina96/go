@@ -25,10 +25,15 @@ class ChatSession(Base):
     is_feedback_sent = Column(Boolean, default=False)
     followup_count = Column(Integer, default=0)
     
-    # CRM Profile Data 
+    # CRM Profile Data
     client_name = Column(String, nullable=True)
     child_age = Column(Integer, nullable=True)
-    client_intent = Column(String, nullable=True) 
+    client_intent = Column(String, nullable=True)
+    client_city = Column(String, nullable=True)
+    client_audience = Column(String, nullable=True)  # "children" | "adults"
+    preferred_time = Column(String, nullable=True)
+    funnel_stage = Column(String, default="new")  # new|name|city|qualified|booked|paid|attended
+    is_subscription_offered = Column(Boolean, default=False)
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
