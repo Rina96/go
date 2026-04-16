@@ -21,11 +21,15 @@ class AlfaCrmManager:
     TOKEN_TTL = 3600  # 1 hour
 
     def __init__(self):
-        self.base_url = f"{settings.ALFA_BASE_URL}/v2api"
+        base = settings.ALFA_BASE_URL
+        if not base:
+            base = f"https://{settings.ALFA_SUBDOMAIN}.s20.online"
+        self.base_url = f"{base}/v2api"
         self.email = settings.ALFA_EMAIL
         self.api_key = settings.ALFA_API_KEY
         self.app_key = settings.ALFA_APP_KEY
         self._lock = asyncio.Lock()
+        logger.info(f"🔗 AlfaCRM URL: {self.base_url}")
 
     @staticmethod
     def get_upcoming_weekend_dates():
@@ -150,7 +154,7 @@ class AlfaCrmManager:
         try:
             headers = await self.get_headers()
             url = f"{self.base_url}/{self.BRANCH_ID}/communication/create"
-            payload = {"customer_id": customer_id, "type": 1, "text": f"🤖 Юлия: {text}"}
+            payload = {"customer_id": customer_id, "type": 1, "text": f"🤖 Айжан: {text}"}
             async with httpx.AsyncClient(verify=False) as client:
                 await client.post(url, headers=headers, json=payload, timeout=5.0)
         except Exception as e:
