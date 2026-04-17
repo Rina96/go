@@ -421,6 +421,24 @@ async def process_incoming_message(
                 logger.info(f"🤐 Bot silent (human takeover): {chat_id}")
                 return
 
+            # ═══ ФИЛЬТР: отвечаем ТОЛЬКО на вопросы про МК/Го/школу ═══
+            # Для новых контактов (первое сообщение) — проверяем релевантность
+            history_len = len(session.history_json or [])
+            if history_len <= 1 and session.funnel_stage in ("new", None):
+                msg_lower = text.lower()
+                go_keywords = [
+                    "го", "go", "мастер", "урок", "занятие", "обучени", "научить",
+                    "курс", "запис", "пробн", "ребёнк", "ребенк", "школ", "игр",
+                    "стратег", "логик", "шахмат", "здравствуйте", "добрый", "привет",
+                    "салем", "ассалау", "сәлем", "можно узнать", "подробн", "стоимост",
+                    "цена", "сколько", "расписани", "адрес", "где наход", "время",
+                    "оплат", "интересу", "хочу", "хотел", "хотим", "нравится",
+                ]
+                is_relevant = any(kw in msg_lower for kw in go_keywords)
+                if not is_relevant:
+                    logger.info(f"🚫 Не про МК, пропускаем: {chat_id} — {text[:100]}")
+                    return
+
             # AUDIO TRANSCRIPTION
             if text.startswith("[AUDIO_URL:") and text.endswith("]"):
                 audio_url = text[len("[AUDIO_URL:"):-1]
