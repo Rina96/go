@@ -421,9 +421,18 @@ async def process_incoming_message(
                 logger.info(f"🤐 Bot silent (human takeover): {chat_id}")
                 return
 
-            # ═══ ФИЛЬТР: отвечаем ТОЛЬКО на вопросы про МК/Го/школу ═══
-            # Для новых контактов (первое сообщение) — проверяем релевантность
+            # ═══ ФИЛЬТР: не отвечать сохранённым контактам ═══
             history_len = len(session.history_json or [])
+            if history_len <= 1 and session.funnel_stage in ("new", None):
+                try:
+                    is_saved = await wa_client.is_contact_saved(chat_id)
+                    if is_saved:
+                        logger.info(f"📒 Контакт сохранён, пропускаем: {chat_id}")
+                        return
+                except Exception:
+                    pass  # если не смогли проверить — продолжаем
+
+            # ═══ ФИЛЬТР: отвечаем ТОЛЬКО на вопросы про МК/Го/школу ═══
             if history_len <= 1 and session.funnel_stage in ("new", None):
                 msg_lower = text.lower()
                 go_keywords = [

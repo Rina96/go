@@ -62,6 +62,23 @@ class GreenApiManager:
                 logger.error(f"WA File Error: {e}")
                 return False
 
+    async def is_contact_saved(self, chat_id: str) -> bool:
+        """Проверяет сохранён ли контакт в телефоне (есть имя в адресной книге)."""
+        url = self._get_url("getContactInfo")
+        payload = {"chatId": chat_id}
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                r = await client.post(url, json=payload, timeout=10.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    # name — имя из адресной книги телефона (не WhatsApp профиль)
+                    contact_name = data.get("name", "")
+                    return bool(contact_name and contact_name.strip())
+                return False
+            except Exception as e:
+                logger.error(f"WA ContactInfo Error: {e}")
+                return False
+
     async def download_file(self, download_url: str) -> bytes:
         async with httpx.AsyncClient(verify=False) as client:
             r = await client.get(download_url)
