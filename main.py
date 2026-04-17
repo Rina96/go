@@ -425,6 +425,28 @@ async def process_incoming_message(
                 client_memory=client_memory
             )
 
+            # Если бот не смог ответить (OpenAI упал) — алерт менеджеру, не отправлять пустоту клиенту
+            if not ai_response.reply_text or ai_response.reply_text.strip() == "":
+                phone = chat_id.replace("@c.us", "")
+                asyncio.create_task(send_telegram_alert(
+                    f"🚨 <b>Бот не смог ответить!</b>\n\n"
+                    f"👤 {session.client_name or phone}\n📱 {phone}\n"
+                    f"💬 Сообщение: {text[:200]}\n\n"
+                    f"⚠️ OpenAI упал 3 раза. Ответьте клиенту вручную!\n"
+                    f"🔗 <a href='https://school-go-whatsapp-bot.onrender.com/leads/{session.id}'>Карточка</a>"
+                ))
+                await db.commit()
+                return
+
+            # Фильтр абонементов — если стадия до "booked" и бот упомянул цены обучения
+            reply = ai_response.reply_text
+            if session.funnel_stage in ("new", "name", "city", "qualified", None):
+                import re
+                reply = re.sub(r'[Аа]бонемент\w*[^.!?]*(?:28\s*000|50\s*000)[^.!?]*[.!?]?\s*', '', reply)
+                reply = re.sub(r'(?:от\s+)?28\s*000\s*тг[^.!?]*[.!?]?\s*', '', reply)
+                reply = re.sub(r'(?:от\s+)?50\s*000\s*тг[^.!?]*[.!?]?\s*', '', reply)
+                ai_response.reply_text = reply.strip()
+
             await crud.add_message_to_history(db, session, role="assistant", text=ai_response.reply_text)
 
             # RESCHEDULING
