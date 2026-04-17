@@ -1,6 +1,6 @@
 import asyncio
 from sqlalchemy.future import select
-from sqlalchemy import func
+from sqlalchemy import func, and_
 from loguru import logger
 from datetime import datetime, timedelta, timezone
 from database import AsyncSessionLocal
@@ -14,13 +14,156 @@ def now_almaty() -> datetime:
 
 
 async def check_all_proactive_tasks():
-    """Only daily report to Telegram. No WhatsApp spam."""
+    """Daily report + follow-ups for silent leads."""
     try:
         async with AsyncSessionLocal() as db:
             await handle_daily_report(db)
+            await handle_followups(db)
     except Exception as e:
         logger.error(f"❌ SCHEDULER ERROR: {e}")
 
+
+# ═══════════════════════════════════════════
+# FOLLOW-UP: 24ч и 3 дня для остановившихся
+# ═══════════════════════════════════════════
+
+async def handle_followups(db):
+    """Follow-up для лидов которые замолчали. Только те, с кем бот общался."""
+    try:
+        from green_api import wa_client
+
+        now = now_almaty()
+
+        # Не отправлять ночью (до 9:00 и после 21:00 Алматы)
+        if now.hour < 9 or now.hour >= 21:
+            return
+
+        # Лиды в активных стадиях (не declined, не paid, не new без истории)
+        active_stages = ["name", "city", "qualified", "paused", "rescheduled"]
+        result = await db.execute(
+            select(ChatSession).where(
+                ChatSession.funnel_stage.in_(active_stages),
+                ChatSession.human_takeover != True,
+                ChatSession.followup_count < 2,  # макс 2 follow-up
+            )
+        )
+        leads = result.scalars().all()
+
+        for s in leads:
+            if not s.last_interaction:
+                continue
+
+            hours_silent = (now - s.last_interaction).total_seconds() / 3600
+            history = s.history_json or []
+
+            # Минимум 2 сообщения в истории (бот с ним общался)
+            if len(history) < 2:
+                continue
+
+            # Последнее сообщение от бота? (клиент не ответил)
+            last_msg = history[-1] if history else {}
+            if last_msg.get("role") != "assistant":
+                continue  # клиент последний писал — бот уже ответил
+
+            name = s.client_name or ""
+            phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
+
+            # Follow-up 1: через 24 часа
+            if hours_silent >= 24 and s.followup_count == 0:
+                msg = _build_followup_1(name, s)
+                await wa_client.send_message(s.whatsapp_chat_id, msg)
+                s.followup_count = 1
+                s.funnel_stage = "paused"
+                await db.commit()
+                logger.info(f"📩 Follow-up 1 (24ч): {name or phone}")
+
+            # Follow-up 2: через 3 дня
+            elif hours_silent >= 72 and s.followup_count == 1:
+                msg = _build_followup_2(name, s)
+                await wa_client.send_message(s.whatsapp_chat_id, msg)
+                s.followup_count = 2
+                await db.commit()
+                logger.info(f"📩 Follow-up 2 (3 дня): {name or phone}")
+
+    except Exception as e:
+        logger.error(f"Follow-up Error: {e}")
+
+
+def _build_followup_1(name: str, session) -> str:
+    """Первое касание через 24ч — мягкое напоминание со срочностью."""
+    from integrations import dates_util
+    dates = dates_util.get_upcoming_weekend_dates()
+
+    greeting = f"{name}, " if name else ""
+
+    if session.funnel_stage == "qualified" or session.client_audience:
+        return f"{greeting}добрый день! 😊 Напоминаю — ближайший пробный урок {dates['saturday']}. Осталось 4 места из 8, запись до пятницы. Записать вас?"
+    elif session.funnel_stage == "rescheduled":
+        return f"{greeting}здравствуйте! 😊 Мы переносили ваш урок — какая дата будет удобна? Ближайшие: {dates['saturday']} и {dates['sunday']}"
+    elif session.client_city:
+        return f"{greeting}добрый день! 😊 Мы недавно общались про школу Го. Ещё актуально? Ближайший пробный урок {dates['saturday']} — осталось несколько мест!"
+    else:
+        return f"{greeting}добрый день! 😊 Вы интересовались школой Го. Ближайший пробный урок {dates['saturday']} — всего 2000 тг за 90 минут. Хотите записаться?"
+
+
+def _build_followup_2(name: str, session) -> str:
+    """Второе касание через 3 дня — последняя попытка."""
+    greeting = f"{name}, " if name else ""
+    return f"{greeting}привет! 😊 Это Айжан из школы Го. Если передумаете — мы всегда рады видеть! Просто напишите когда удобно, подберём время 🙏"
+
+
+# ═══════════════════════════════════════════
+# НАПОМИНАНИЕ ЗАПИСАННЫМ — за день до МК
+# ═══════════════════════════════════════════
+
+async def handle_mk_reminder(db):
+    """Напоминание за день до МК записанным клиентам."""
+    try:
+        from green_api import wa_client
+        from integrations import dates_util
+
+        now = now_almaty()
+        # Отправляем напоминания в 18:00
+        if now.hour != 18 or now.minute >= 30:
+            return
+
+        tomorrow = (now + timedelta(days=1)).strftime("%d.%m")
+
+        result = await db.execute(
+            select(ChatSession).where(
+                ChatSession.booked_date == tomorrow,
+                ChatSession.is_reminder_sent != True,
+                ChatSession.human_takeover != True,
+            )
+        )
+        leads = result.scalars().all()
+
+        for s in leads:
+            name = s.client_name or ""
+            greeting = f"{name}, " if name else ""
+            city = s.client_city or ""
+
+            address = ""
+            if "астана" in city.lower():
+                address = "📍 Керей, Жанибек хандар 12Б (Aykun)"
+            elif "алматы" in city.lower():
+                address = "📍 Жамбыла 67 (Школа Го)"
+            else:
+                address = "📍 Адрес уточните у менеджера"
+
+            msg = f"{greeting}напоминаю — завтра пробный урок! 😊\n{address}\nЖдём вас! 🎯"
+            await wa_client.send_message(s.whatsapp_chat_id, msg)
+            s.is_reminder_sent = True
+            await db.commit()
+            logger.info(f"🔔 MK reminder: {name or s.whatsapp_chat_id}")
+
+    except Exception as e:
+        logger.error(f"MK Reminder Error: {e}")
+
+
+# ═══════════════════════════════════════════
+# DAILY REPORT
+# ═══════════════════════════════════════════
 
 async def handle_daily_report(db):
     """Send daily report to Telegram at 21:00 Almaty time."""
@@ -53,7 +196,7 @@ async def handle_daily_report(db):
 
         # By stage
         stages = {}
-        for stage in ["new", "name", "city", "qualified", "booked", "rescheduled", "declined", "paid"]:
+        for stage in ["new", "name", "city", "qualified", "booked", "paused", "rescheduled", "declined", "paid"]:
             r = await db.execute(
                 select(func.count()).select_from(ChatSession).where(
                     ChatSession.funnel_stage == stage
@@ -118,6 +261,7 @@ async def handle_daily_report(db):
             f"  📍 Город: {stages['city']}\n"
             f"  ✅ Квалиф.: {stages['qualified']}\n"
             f"  📅 Записан: {stages['booked']}\n"
+            f"  ⏸ Остановился: {stages['paused']}\n"
             f"  🔄 Перенос: {stages['rescheduled']}\n"
             f"  ❌ Отказ: {stages['declined']}\n"
             f"  💰 Оплачен: {stages['paid']}\n\n"

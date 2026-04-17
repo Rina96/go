@@ -114,6 +114,7 @@ async def leads_dashboard():
         "city": {"label": "📍 Город", "color": "#3b82f6", "items": []},
         "qualified": {"label": "✅ Квалиф.", "color": "#f59e0b", "items": []},
         "booked": {"label": "📅 Записан", "color": "#10b981", "items": []},
+        "paused": {"label": "⏸ Остановился", "color": "#a855f7", "items": []},
         "rescheduled": {"label": "🔄 Перенос", "color": "#f97316", "items": []},
         "declined": {"label": "❌ Отказ", "color": "#ef4444", "items": []},
         "paid": {"label": "💰 Оплачен", "color": "#059669", "items": []},
@@ -223,7 +224,7 @@ async def leads_table():
     rows = ""
     for s in sessions:
         phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
-        stage_map = {"new":"🆕 Новый","name":"👤 Имя","city":"📍 Город","qualified":"✅ Квалиф.","booked":"📅 Записан","rescheduled":"🔄 Перенос","declined":"❌ Отказ","paid":"💰 Оплачен"}
+        stage_map = {"new":"🆕 Новый","name":"👤 Имя","city":"📍 Город","qualified":"✅ Квалиф.","booked":"📅 Записан","paused":"⏸ Остановился","rescheduled":"🔄 Перенос","declined":"❌ Отказ","paid":"💰 Оплачен"}
         status = stage_map.get(s.funnel_stage or "new", "🆕 Новый")
         date = s.created_at.strftime("%d.%m.%Y %H:%M") if s.created_at else ""
         aud = "Дети" if s.client_audience == "children" else ("Взрослые" if s.client_audience == "adults" else "—")
@@ -273,7 +274,7 @@ async def lead_card(lead_id: int):
         return HTMLResponse("<h1>Клиент не найден</h1>", status_code=404)
 
     phone = (s.whatsapp_chat_id or "").replace("@c.us", "")
-    stage_map = {"new":"🆕 Новый","name":"👤 Имя получено","city":"📍 Город указан","qualified":"✅ Квалифицирован","booked":"📅 Записан на МК","rescheduled":"🔄 Перенёс МК","declined":"❌ Отказался","paid":"💰 Оплачен"}
+    stage_map = {"new":"🆕 Новый","name":"👤 Имя получено","city":"📍 Город указан","qualified":"✅ Квалифицирован","booked":"📅 Записан на МК","paused":"⏸ Остановился","rescheduled":"🔄 Перенёс МК","declined":"❌ Отказался","paid":"💰 Оплачен"}
     status = stage_map.get(s.funnel_stage or "new", "🆕 Новый")
     aud = "👶 Дети" if s.client_audience == "children" else ("👤 Взрослые" if s.client_audience == "adults" else "—")
     fmt = "🌐 Онлайн" if getattr(s, 'client_format', None) == "online" else ("🏫 Оффлайн" if getattr(s, 'client_format', None) == "offline" else "��")
@@ -500,7 +501,7 @@ async def process_incoming_message(
             if session.decline_reason:
                 parts.append(f"Причина отказа: {session.decline_reason}")
             if session.funnel_stage:
-                stage_ru = {"new":"новый","name":"назвал имя","city":"указал город","qualified":"квалифицирован","booked":"записан","rescheduled":"перенёс","declined":"отказался","paid":"оплатил"}
+                stage_ru = {"new":"новый","name":"назвал имя","city":"указал город","qualified":"квалифицирован","booked":"записан","rescheduled":"перенёс","paused":"остановился","declined":"отказался","paid":"оплатил"}
                 parts.append(f"Стадия: {stage_ru.get(session.funnel_stage, session.funnel_stage)}")
             if parts:
                 client_memory = "ПАМЯТЬ О КЛИЕНТЕ: " + " | ".join(parts)
