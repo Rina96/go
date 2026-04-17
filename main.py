@@ -65,6 +65,8 @@ async def lifespan(app: FastAPI):
             "client_objection": "VARCHAR",
             "ai_notes": "VARCHAR",
             "decline_reason": "VARCHAR",
+            "human_takeover": "BOOLEAN DEFAULT FALSE",
+            "human_takeover_at": "TIMESTAMP",
         }
         async with engine.begin() as conn:
             if is_postgres:
@@ -308,6 +310,7 @@ async def lead_card(lead_id: int):
       <div class="info-item"><span class="info-label">Первый контакт</span><span class="info-value">{created}</span></div>
       <div class="info-item"><span class="info-label">Последнее сообщение</span><span class="info-value">{last}</span></div>
       <div class="info-item"><span class="info-label">Сообщений</span><span class="info-value">{len(history)}</span></div>
+      <div class="info-item"><span class="info-label">Бот</span><span class="info-value">{'🤐 Выключен (менеджер)' if getattr(s, 'human_takeover', False) else '🤖 Активен'}</span></div>
     </div>"""
 
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -338,12 +341,42 @@ h1{{font-size:20px}}
 <div class="top">
   <h1>{'👤 ' + (s.client_name or phone)}</h1>
   <a href="/leads" class="btn">← Воронка</a>
+  {'<a href="/leads/' + str(s.id) + '/bot-on" class="btn" style="background:#10b981;margin-left:6px">🤖 Включить бота</a>' if getattr(s, 'human_takeover', False) else '<a href="/leads/' + str(s.id) + '/bot-off" class="btn" style="background:#ef4444;margin-left:6px">🤐 Выключить бота</a>'}
 </div>
 <div class="card-layout">
   <div class="panel"><div class="panel-title">📋 Информация</div>{info}</div>
   <div class="panel"><div class="panel-title">💬 Переписка ({len(history)} сообщений)</div><div class="chat-box">{chat_html if chat_html else '<div style="text-align:center;color:#475569;padding:20px">Нет сообщений</div>'}</div></div>
 </div>
 </body></html>"""
+
+
+# ═══════════════════════════════════════════
+# BOT ON/OFF TOGGLE
+# ═══════════════════════════════════════════
+
+@app.get("/leads/{lead_id}/bot-off")
+async def bot_off(lead_id: int):
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(ChatSession).where(ChatSession.id == lead_id))
+        s = result.scalar_one_or_none()
+        if s:
+            s.human_takeover = True
+            s.human_takeover_at = datetime.datetime.utcnow()
+            await db.commit()
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(f"/leads/{lead_id}", status_code=302)
+
+@app.get("/leads/{lead_id}/bot-on")
+async def bot_on(lead_id: int):
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(ChatSession).where(ChatSession.id == lead_id))
+        s = result.scalar_one_or_none()
+        if s:
+            s.human_takeover = False
+            s.human_takeover_at = None
+            await db.commit()
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(f"/leads/{lead_id}", status_code=302)
 
 
 # ═══════════════════════════════════════════
@@ -357,15 +390,36 @@ async def process_incoming_message(
     try:
         cloud_history = await wa_client.get_chat_history(chat_id, count=10)
 
-        human_replied = any(
-            msg.get("role") == "assistant" and msg.get("ts", 0) > incoming_ts
-            for msg in cloud_history
-        )
-        if human_replied:
-            return
-
         async with AsyncSessionLocal() as db:
             session = await crud.get_or_create_session(db, chat_id)
+
+            # ═══ HUMAN TAKEOVER — менеджер подключился, бот молчит ═══
+            # Если в cloud_history есть исходящее сообщение НЕ от бота (менеджер ответил вручную)
+            # Проверяем: если менеджер ответил после последнего сообщения бота в БД
+            if not session.human_takeover:
+                # Ищем исходящие (от нас) в cloud_history которых нет в DB history
+                db_bot_texts = set()
+                for msg in (session.history_json or []):
+                    if msg.get("role") == "assistant":
+                        db_bot_texts.add(msg.get("text", "")[:50])
+
+                for msg in cloud_history:
+                    if msg.get("role") == "assistant":
+                        msg_text = msg.get("text", "")[:50]
+                        if msg_text and msg_text not in db_bot_texts:
+                            # Исходящее сообщение которого нет в БД = менеджер написал вручную
+                            session.human_takeover = True
+                            session.human_takeover_at = datetime.datetime.utcnow()
+                            await db.commit()
+                            logger.info(f"🤝 Human takeover: {chat_id}")
+                            break
+
+            if session.human_takeover:
+                # Сохраняем сообщение клиента в историю, но НЕ отвечаем
+                await crud.add_message_to_history(db, session, role="user", text=text)
+                await db.commit()
+                logger.info(f"🤐 Bot silent (human takeover): {chat_id}")
+                return
 
             # AUDIO TRANSCRIPTION
             if text.startswith("[AUDIO_URL:") and text.endswith("]"):

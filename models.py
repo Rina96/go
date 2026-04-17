@@ -39,7 +39,9 @@ class ChatSession(Base):
     funnel_stage = Column(String, default="new")
     is_subscription_offered = Column(Boolean, default=False)
     decline_reason = Column(String, nullable=True)  # why declined
-    
+    human_takeover = Column(Boolean, default=False)  # менеджер подключился — бот молчит
+    human_takeover_at = Column(DateTime, nullable=True)  # когда менеджер подключился
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     last_interaction = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
