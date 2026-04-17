@@ -421,32 +421,40 @@ async def process_incoming_message(
                 logger.info(f"🤐 Bot silent (human takeover): {chat_id}")
                 return
 
-            # ═══ ФИЛЬТР: не отвечать сохранённым контактам ═══
+            # ═══ ФИЛЬТРЫ: бот молчит, но ВСЕГДА сохраняет в CRM ═══
+            skip_reply = False
             history_len = len(session.history_json or [])
+
             if history_len <= 1 and session.funnel_stage in ("new", None):
+                # Фильтр 1: сохранённые контакты
                 try:
                     is_saved = await wa_client.is_contact_saved(chat_id)
                     if is_saved:
-                        logger.info(f"📒 Контакт сохранён, пропускаем: {chat_id}")
-                        return
+                        skip_reply = True
+                        logger.info(f"📒 Контакт сохранён, бот молчит: {chat_id}")
                 except Exception:
-                    pass  # если не смогли проверить — продолжаем
+                    pass
 
-            # ═══ ФИЛЬТР: отвечаем ТОЛЬКО на вопросы про МК/Го/школу ═══
-            if history_len <= 1 and session.funnel_stage in ("new", None):
-                msg_lower = text.lower()
-                go_keywords = [
-                    "го", "go", "мастер", "урок", "занятие", "обучени", "научить",
-                    "курс", "запис", "пробн", "ребёнк", "ребенк", "школ", "игр",
-                    "стратег", "логик", "шахмат", "здравствуйте", "добрый", "привет",
-                    "салем", "ассалау", "сәлем", "можно узнать", "подробн", "стоимост",
-                    "цена", "сколько", "расписани", "адрес", "где наход", "время",
-                    "оплат", "интересу", "хочу", "хотел", "хотим", "нравится",
-                ]
-                is_relevant = any(kw in msg_lower for kw in go_keywords)
-                if not is_relevant:
-                    logger.info(f"🚫 Не про МК, пропускаем: {chat_id} — {text[:100]}")
-                    return
+                # Фильтр 2: не про МК/Го
+                if not skip_reply:
+                    msg_lower = text.lower()
+                    go_keywords = [
+                        "го", "go", "мастер", "урок", "занятие", "обучени", "научить",
+                        "курс", "запис", "пробн", "ребёнк", "ребенк", "школ", "игр",
+                        "стратег", "логик", "шахмат", "здравствуйте", "добрый", "привет",
+                        "салем", "ассалау", "сәлем", "можно узнать", "подробн", "стоимост",
+                        "цена", "сколько", "расписани", "адрес", "где наход", "время",
+                        "оплат", "интересу", "хочу", "хотел", "хотим", "нравится",
+                    ]
+                    if not any(kw in msg_lower for kw in go_keywords):
+                        skip_reply = True
+                        logger.info(f"🚫 Не про МК, бот молчит: {chat_id} — {text[:100]}")
+
+            if skip_reply:
+                # Сохраняем в CRM но НЕ отвечаем
+                await crud.add_message_to_history(db, session, role="user", text=text)
+                await db.commit()
+                return
 
             # AUDIO TRANSCRIPTION
             if text.startswith("[AUDIO_URL:") and text.endswith("]"):
